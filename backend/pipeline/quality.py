@@ -488,7 +488,7 @@ def align_scores(clips: Sequence[Dict[str, Any]], llm_results: Any,
             c["recommend_reason"] = r.get("recommend_reason") or ""
             c["score_source"] = "llm"
             # Preserve short-form suitability dimensions when the model returns them.
-            for field in ("hook_score", "standalone_score", "entry_point_score", "context_score", "development_score", "payoff_score", "emotional_score", "educational_score", "ending_score", "duration_fit_score", "short_form_score"):
+            for field in ("hook_score", "standalone_score", "entry_point_score", "context_score", "development_score", "payoff_score", "emotional_score", "educational_score", "ending_score", "duration_fit_score", "short_form_score", "scroll_stop_score", "curiosity_gap_score", "shareability_score", "rewatch_loop_score"):
                 value = _to_score(r.get(field)) if r else None
                 if value is not None:
                     c[field] = value
@@ -550,6 +550,47 @@ def compute_short_structure_score(clip: Dict[str, Any]) -> Optional[float]:
     return round(sum(values[key] * weight for key, weight in weights.items() if values[key] is not None) / total_weight, 2)
 
 
+RETENTION_SIGNAL_WEIGHTS: Dict[str, float] = {
+    "scroll_stop_score": 0.30,
+    "curiosity_gap_score": 0.25,
+    "shareability_score": 0.25,
+    "rewatch_loop_score": 0.20,
+}
+
+
+def compute_retention_signal_score(clip: Dict[str, Any]) -> Optional[float]:
+    """Aggregate the four pre-publish attention/retention signals.
+
+    These signals are deliberately separate from the structural quality score.
+    They are optimization hints, not publish gates, and missing signals do not
+    make an otherwise valid Short unpublishable.
+    """
+    values = {key: _to_score(clip.get(key)) for key in RETENTION_SIGNAL_WEIGHTS}
+    present = [key for key, value in values.items() if value is not None]
+    if len(present) < 2:
+        return None
+    total_weight = sum(RETENTION_SIGNAL_WEIGHTS[key] for key in present)
+    return round(
+        sum(values[key] * RETENTION_SIGNAL_WEIGHTS[key] for key in present) / total_weight,
+        2,
+    )
+
+
+def compute_short_candidate_score(clip: Dict[str, Any]) -> Optional[float]:
+    """Combine content structure with early retention signals.
+
+    Structure remains dominant so virality-oriented signals cannot rescue a
+    weak or context-dependent clip. Hard publish gates are evaluated separately.
+    """
+    structure = compute_short_structure_score(clip)
+    retention = compute_retention_signal_score(clip)
+    if structure is None:
+        return None
+    if retention is None:
+        return structure
+    return round((structure * 0.70) + (retention * 0.30), 2)
+
+
 SHORT_PUBLISH_THRESHOLDS: Dict[str, float] = {
     "hook_score": 0.60,
     "standalone_score": 0.65,
@@ -579,13 +620,23 @@ def build_short_candidates(scored: Sequence[Dict[str, Any]]) -> List[Dict[str, A
         if not publishable:
             continue
         candidate["candidate_type"] = "short"
-        candidate["candidate_score"] = float(candidate.get("short_form_score") or 0.0)
+        candidate_score = compute_short_candidate_score(candidate)
+        if candidate_score is None:
+            candidate_score = float(candidate.get("short_form_score") or 0.0)
+        candidate["candidate_score"] = candidate_score
         candidate["candidate_structure"] = {
             "hook": float(candidate.get("hook_score") or 0.0),
             "context": float(candidate.get("context_score") or 0.0),
             "development": float(candidate.get("development_score") or 0.0),
             "payoff": float(candidate.get("payoff_score") or 0.0),
             "ending": float(candidate.get("ending_score") or 0.0),
+        }
+        candidate["candidate_retention"] = {
+            "scroll_stop": float(candidate.get("scroll_stop_score") or 0.0),
+            "curiosity_gap": float(candidate.get("curiosity_gap_score") or 0.0),
+            "shareability": float(candidate.get("shareability_score") or 0.0),
+            "rewatch_loop": float(candidate.get("rewatch_loop_score") or 0.0),
+            "retention_score": float(compute_retention_signal_score(candidate) or 0.0),
         }
         candidates.append(candidate)
     return sorted(candidates, key=lambda c: (-c["candidate_score"], _id_key(c.get("id"))))

@@ -1,18 +1,20 @@
 # AutoClip 产品路线图
 
-> 从"纯本地桌面工具"演进为"有账号、有数据、可商业化"的产品。
-> 适配前提：**托管额度 credits 计费 · 视频处理保持纯本地 · 国内外都要（国内先发）· 个人开发者 + AI**。
+> AutoClip is currently a **personal-first local tool** for producing upload-ready Shorts from long-form video.
+> Commercial SaaS, accounts, hosted credits, cloud processing, and payment are intentionally **deferred**. The near-term goal is better clip selection, retention-oriented scoring, reliable rendering, and a polished local desktop workflow.
 
 ---
 
 ## 0. 已定的战略前提
 
-| 维度 | 选择 | 含义 |
+| 维度 | 当前决定 | 含义 |
 |------|------|------|
-| 商业模式 | 托管额度 credits | 你代付 LLM 调用，按量/套餐卖 credits |
-| 处理位置 | 纯本地 | 下载/ffmpeg/Whisper 在用户机器跑，你不背算力 |
-| 市场 | 国内外都要 | **国内先发，海外 Phase 3 再上**（避免一上来双合规拖死）|
-| 资源 | 个人 + AI | 原则：**买 > 造**，重度依赖托管服务，节奏保守 |
+| 产品形态 | **Personal-first / local** | 先把 AutoClip 做成自己日常真正会用的工具，不围绕商业化约束架构 |
+| LLM 调用 | BYO key / local configuration | API keys remain user-controlled; no hosted LLM proxy is required |
+| 视频处理 | **纯本地** | 下载、FFmpeg、Whisper 和最终渲染在本机完成 |
+| 数据 | 本地优先 | Projects, transcripts, metadata, exports and performance notes stay local |
+| 商业化 | **Deferred** | SaaS、账号、credits、订阅、支付、云端处理全部不进入当前执行计划 |
+| 开发方式 | 个人 + AI | 优先复用成熟库/服务，但避免为了未来 SaaS 提前增加后端复杂度 |
 
 ## 1. 核心架构判断
 
@@ -65,11 +67,11 @@
 
 > These are optimization signals, not guarantees of virality. The goal is to improve the system's ability to identify clips with stronger attention, retention, shareability, and rewatch potential, then validate those decisions against real audience performance.
 
-- [ ] **Scroll-stop score** — add a dedicated 1–3 second opening score that evaluates immediate attention, clarity, novelty, emotional force, questions, bold-but-truthful claims, and whether the viewer quickly understands why they should keep watching.
-- [ ] **Curiosity-gap score** — detect legitimate unanswered questions or information gaps created by the opening and resolved by the clip, while explicitly penalizing manufactured clickbait or misleading hooks.
-- [ ] **Shareability score** — evaluate whether a clip naturally creates reasons to share: relatability, usefulness, identity/self-recognition, emotional resonance, insight, or constructive disagreement.
-- [ ] **Rewatch / loop score** — identify clips with replay potential through dense insight, surprising payoffs, compact information, strong opening-to-ending relationships, or endings that naturally connect back to the hook.
-- [ ] **Retention-aware candidate ranking** — combine scroll-stop, curiosity, shareability, rewatch, and existing structure scores into the candidate-selection architecture without allowing these newer signals to override hard quality gates such as complete thought and valid duration.
+- [x] **Scroll-stop score** — dedicated 1–3 second opening signal for immediate attention, clarity, novelty, emotional force, questions, and bold-but-truthful claims.
+- [x] **Curiosity-gap score** — legitimate unanswered-question / information-gap signal with explicit anti-clickbait guidance.
+- [x] **Shareability score** — natural reasons to share through relatability, usefulness, identity, emotional resonance, insight, or constructive disagreement.
+- [x] **Rewatch / loop score** — replay potential from dense insight, surprising payoff, compact information, opening/ending relationships, or natural looping.
+- [x] **Retention-aware candidate ranking** — combines the four retention signals with existing structure scoring while preserving hard publish gates.
 - [ ] **Audience-performance feedback loop** — ingest real post-publish metrics such as chose-to-view / viewed-vs-swiped, average view duration, average percentage viewed, completion, likes, comments, shares, saves where available, and replay/retention signals; use them to audit and calibrate AutoClip's prediction scores rather than claiming pre-publish virality.
 - [ ] **Performance-based model calibration** — compare predicted candidate scores against real outcomes, identify systematic misses (strong hook but poor retention, high retention but low sharing, etc.), and iteratively adjust scoring weights/prompts using measured data.
 - [ ] **Platform-specific retention profiles** — keep the shared content-quality model, but allow platform-specific scoring/packaging profiles for YouTube Shorts, TikTok, and future platforms when their available performance signals or creative constraints materially differ.
@@ -77,49 +79,62 @@
 
 ## 3. 分阶段计划
 
-### Phase 0 · 固本（约 2–4 周，不碰钱）
-**目标**：把 v1.1 真正做成"能发、能更新、能观测"的产品基线。
-- 签名公证（Apple Developer ID + notarize），去掉"右键打开"
-- 多平台打包（Intel / Windows / Linux；PBS 与 faster-whisper 本就跨平台）
-- 云端 CI 构建跑通（`desktop-build.yml` 实跑验证）
-- 接入 **Sentry** 崩溃/错误上报
-- 接入 **PostHog**：匿名、可关、本地缓冲的基础埋点（关键事件：导入、出片、失败、设置 key）
-- **隐私政策 + 埋点开关**（埋点上线前必须有）
-- 应用内**更新检查 / 自动更新**（Tauri updater）
+### Phase A · Retention Engine — 当前执行阶段
+**目标**：让 AutoClip 在不增加任何云端产品基础设施的情况下，更稳定地挑出值得发布的 Shorts。
 
-**出口标准**：干净机器一键装、能自更新、线上能看到崩溃和基础使用漏斗。
+- [x] Candidate-moment architecture
+- [x] Truthful entry-point selection
+- [x] Payoff-aware ending selection
+- [x] Mini-story structure signals
+- [x] Scroll-stop score
+- [x] Curiosity-gap score
+- [x] Shareability score
+- [x] Rewatch / loop score
+- [x] Retention-aware candidate ranking
+- [ ] Real-world validation against exported Shorts
+- [ ] Tune scoring weights from observed results
+- [ ] Platform-specific profiles only when actual usage justifies them
 
-### Phase 1 · 账号 + 云骨架（约 4–8 周）
-**目标**：立起云端骨架，账号可登但不强制。
-- 建 **Supabase** 项目（Auth + Postgres）
-- 桌面端登录（**匿名优先**：先能用，登录解锁同步/额度）
-- 用户 / 设备 / 会话模型；PostHog 在登录后做身份关联
-- 设置项云端同步（API key 仍建议本地存，敏感信息不上云）
-- 数据模型预留 credits 账本、订阅状态字段
+**出口标准**：AutoClip 输出按结构质量 + 留存优化信号排序的完整 Shorts，同时 hard quality gates 始终优先。
 
-**出口标准**：能注册/登录、能在后台看到"谁在用、用了什么"，但还不收费。
+### Phase B · Local product hardening
+**目标**：让个人桌面工作流足够稳定，可以长期日常使用。
 
-### Phase 2 · LLM 代理 + credits + 付费（国内先发，约 6–10 周）
-**目标**：跑通"扣费 → 收钱"闭环。
-- **LiteLLM 代理**：桌面端的 LLM 调用改为走"你的后端代理"（鉴权后转发），按 token 记账扣 credits；保留 BYO-key 作为免费档
-- **credits 账本**：充值、扣减、流水、风控（频率/异常）
-- **免费 / Pro 分层** + 桌面端权益网关（高级模型、批量、无水印等按档解锁）
-- **支付（国内）**：微信/支付宝，credits 套餐 + 订阅
-- 用 Phase 1 的数据定价打包；上线 **A/B 定价**（PostHog 实验）
+- Windows real-device validation
+- Apple notarization / signing when macOS distribution is needed
+- Windows code signing when distributing Windows builds
+- Intel / Windows / Linux packaging as needed
+- CI build validation
+- Tauri updater
+- Local crash/error diagnostics
+- Privacy-preserving optional local diagnostics
+- Home/project-card redesign and preview workflow
+- Design system and visual polish
 
-**出口标准**：用户能充值、能扣费、能升级 Pro；有第一批付费。
+**出口标准**：clean-machine install、可靠更新、稳定的日常工作流，以及完成度足够高的本地产品体验。
 
-### Phase 3 · 增长 / 规模 / 第二市场（持续）
-- **海外市场**：Stripe 支付 + 境外区部署 + GDPR 合规（这一步才碰双区）
-- 增长闭环：邀请/推荐、模板库、切片分享（带产品水印做传播）
-- 留存：用 PostHog 漏斗找流失点，针对性优化
-- 按需再评估：云端处理选项（弱机用户）、Web 端伴侣、团队协作
+### Phase C · Personal workflow expansion
+仅在核心 pipeline 稳定后继续：
 
-## 4. 横切关注（贯穿各阶段）
+- Better project search/filtering
+- Batch processing
+- Export presets and per-platform packaging
+- Local performance notes / CSV import for post-publish metrics
+- Hook/caption A/B generation as local experiments
+- Optional content libraries/templates
+- More intelligent source-caption detection
 
-- **隐私 / 合规**：credits 模型下，字幕/转写文本会流经你的 LLM 代理 = 你开始处理用户内容 → 必须有隐私政策、数据保留策略；国内受《个人信息保护法》约束，埋点/账号上线前先合规。
-- **安全**：云后端是全新攻击面。每进一阶段用 `/cso`（安全审计 skill）过一遍：鉴权、代理防滥用、支付回调验签、密钥管理。
-- **成本护栏**：LLM 代理要有每用户限速 + 单次/日上限 + 异常熔断，避免被刷爆账单。
+### Deferred · SaaS / accounts / payments
+这些内容**暂不属于当前执行计划**。
+
+如果未来 AutoClip 再转向公开商业产品，之前考虑过的 Supabase、LiteLLM proxy、credits、PostHog cloud reporting、payments、subscriptions、Stripe、cloud processing 等可以单独重新规划。当前实现不应为了这些未来可能性增加云端复杂度。
+
+## 4. 横切关注（当前本地产品）
+
+- **Privacy**：API keys、transcripts、source media、metadata 和 exports 默认留在本机，除非用户明确选择外部 provider。
+- **Security**：保护本地 secrets，避免 credentials 进入 Git，并把生成媒体/runtime artifacts 排除在版本库之外。
+- **Reliability**：优先 deterministic gates、回归测试和真实导出验证，而不是依赖不可解释的“viral”启发式。
+- **Performance**：视频处理保持本地并继续利用 GPU；不要为了未来 SaaS 提前引入 server dependency。
 
 ## 5. UI 优化（可与上面并行，不依赖云端）
 
@@ -137,12 +152,16 @@
 
 Quackback 是第二阶段：非开发者的反馈连续多到 Discussions 不够用，并且需要独立的反馈、路线图和更新日志页面时再装。装上之后，确认要做的需求仍写回 GitHub Issue。Featurebase 免费档没有 Agent 能调用的接口，Linear 不适合公众提需求，这两条不走。
 
-## 7. 排序建议（个人开发者别贪）
+## 7. 当前执行顺序
 
-1. **先补上还没完成的交付。** v1.3.1 已经有八语界面、崩溃上报和应用内更新。近阶段见 `docs/COMMUNITY_BOARD.md`：Windows 真机验证、Apple 公证与 Windows 代码签名、首页和项目卡。公证和代码签名完成前不做账号。
-2. 再上 Phase 1 云骨架（账号/埋点），用真实数据决定要不要、怎么收费。
-3. Phase 2 **只发国内**，验证付费意愿后再考虑海外（Phase 3）。
-4. 任何一阶段，能用托管服务就别自己造。
+1. **Finish the Retention Engine first** — scroll-stop、curiosity gap、shareability、rewatch/loop，然后做 retention-aware ranking。
+2. 用真实 source videos 验证生成的 Shorts，并检查实际导出结果。
+3. 根据观察到的结果调整 prompt / weights；不要把这些分数当成 virality 保证。
+4. 完成本地 release hardening：Windows 验证、需要时的 signing/notarization、CI、updater 和 UI polish。
+5. 核心 pipeline 稳定后，再扩展个人工作流。
+6. SaaS、账号、hosted credits、subscriptions 和 payments 保持 deferred，除非产品目标发生变化。
+
+**当前优先级：better output, not a business backend.**
 
 ---
 

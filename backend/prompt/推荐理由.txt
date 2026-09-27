@@ -43,6 +43,10 @@
    - `educational_score`: 是否有可带走的信息或洞察。
    - `duration_fit_score`: 建议范围是否自然，不为了凑时长而拖长。
    - `short_form_score`: 综合短视频适配度。
+   - `scroll_stop_score`: 前1-3秒是否有立即让人停下来的真实注意力信号。
+   - `curiosity_gap_score`: 开头是否建立一个真实、可在片段内解决的信息缺口。
+   - `shareability_score`: 是否自然具备被分享给朋友/同事/同类观众的理由。
+   - `rewatch_loop_score`: 是否有信息密度、意外回报或首尾关系带来的重播价值。
 5. `complete_thought` 必须是 boolean。
 6. `short_start_time` / `short_end_time` 必须落在输入话题范围内，并优先落在字幕 cue 边界；如果自然完整的版本无法在目标时长内成立，应返回最合理的完整范围，而不是硬凑时长。
 7. 目标是“完整、真实、可理解”，不是制造耸动的点击诱饵。
@@ -50,7 +54,7 @@
 ---
 
 ## 输出格式
-请严格按照输入数组的结构，在每个话题对象中，补充`final_score`和`recommend_reason`字段，并返回完整的JSON数组。
+请严格按照输入数组的结构，在每个话题对象中，补充评分、短视频结构、留存优化字段和 `final_score` / `recommend_reason`，并返回完整的JSON数组。不要省略任何要求的评分字段。
 
 ### 示例输出
 ```json
@@ -75,5 +79,8 @@
 ```
 
  ## 注意事项：
-- `final_score` 为浮点数，`recommend_reason` 为字符串。
+- 所有 *_score 字段均为0.0到1.0之间的浮点数。
+- `complete_thought` 为 boolean。
+- `short_start_time` / `short_end_time` 为时间戳字符串，`short_duration_sec` 为秒数。
+- `recommend_reason` 为字符串。
 - 最终输出必须是**完整的JSON数组**，不要添加任何其他解释性文字。

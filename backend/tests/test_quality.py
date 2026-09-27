@@ -115,6 +115,64 @@ def test_select_short_candidates_requires_publishable_structure_and_ranks_by_sho
     assert candidates[0]["candidate_structure"]["payoff"] == .9
 
 
+def test_retention_signal_score_weights_attention_signals():
+    from backend.pipeline.quality import compute_retention_signal_score
+
+    clip = {
+        "scroll_stop_score": 1.0,
+        "curiosity_gap_score": 0.8,
+        "shareability_score": 0.6,
+        "rewatch_loop_score": 0.4,
+    }
+    assert compute_retention_signal_score(clip) == 0.73
+
+
+def test_candidate_score_keeps_structure_dominant_but_uses_retention_signals():
+    from backend.pipeline.quality import compute_short_candidate_score
+
+    clip = {
+        "hook_score": .9,
+        "standalone_score": .9,
+        "entry_point_score": .9,
+        "context_score": .9,
+        "development_score": .9,
+        "payoff_score": .9,
+        "ending_score": .9,
+        "emotional_score": .9,
+        "educational_score": .9,
+        "duration_fit_score": .9,
+        "scroll_stop_score": .5,
+        "curiosity_gap_score": .5,
+        "shareability_score": .5,
+        "rewatch_loop_score": .5,
+    }
+    assert compute_short_candidate_score(clip) == .78
+
+
+def test_select_short_candidates_exposes_retention_signals_without_making_them_gates():
+    clips = [{
+        "id": "1",
+        "complete_thought": True,
+        "hook_score": .9,
+        "standalone_score": .9,
+        "entry_point_score": .9,
+        "payoff_score": .9,
+        "ending_score": .9,
+        "short_form_score": .9,
+        "scroll_stop_score": .8,
+        "curiosity_gap_score": .7,
+        "shareability_score": .6,
+        "rewatch_loop_score": .5,
+        "short_start_time": "00:00:00,000",
+        "short_end_time": "00:00:45,000",
+        "short_duration_sec": 45,
+    }]
+    candidates = select_short_candidates(clips)
+    assert len(candidates) == 1
+    assert candidates[0]["candidate_retention"]["scroll_stop"] == .8
+    assert candidates[0]["candidate_retention"]["retention_score"] == .67
+
+
 def test_select_clips_keeps_top_k_when_all_below_threshold():
     scored = [
         {"id": "1", "final_score": 0.4, "outline": "a"},

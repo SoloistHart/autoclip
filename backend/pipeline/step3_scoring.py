@@ -72,6 +72,14 @@ short_end_time,
 short_duration_sec.
 The Short target duration is {duration_lo:.0f}-{duration_hi:.0f} seconds. A complete thought is more important than hitting the exact target. The recommended range MUST stay inside the candidate clip's start_time/end_time. Use only timestamp boundaries that exist in the provided transcript/candidate context; do not invent unrelated time ranges.
 short_form_score is the weighted suitability for TikTok/Reels/Shorts, not raw content quality. Prefer moments with a clear hook, enough context to stand alone, strong payoff, a satisfying ending, and a natural duration.
+
+--- VIRALITY / RETENTION SIGNALS ---
+Also return four separate 0.0-1.0 optimization signals:
+- scroll_stop_score: strength of the first 1-3 seconds for immediate attention, clarity, novelty, emotional force, or a bold-but-truthful claim.
+- curiosity_gap_score: whether the opening creates a legitimate information/question gap that the clip actually resolves. Penalize misleading or manufactured clickbait.
+- shareability_score: natural reasons a viewer might share this with someone, such as relatability, usefulness, identity/self-recognition, emotional resonance, insight, or constructive disagreement.
+- rewatch_loop_score: replay potential from dense insight, surprising payoff, compact information, opening/ending relationships, or a naturally loopable ending.
+Treat these as predictive optimization signals, not guarantees. Do not inflate them just because a topic is popular. A strong signal cannot compensate for an incomplete thought or weak context.
 """
 
         from .quality import load_srt_chunks
