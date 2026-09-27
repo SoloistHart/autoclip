@@ -516,6 +516,17 @@ class PipelineAdapter:
             if not input_video_path.exists():
                 return {"status": "failed", "message": "输入视频文件不存在"}
             
+            import asyncio
+            loop = asyncio.get_running_loop()
+
+            def render_progress(ratio: float, message: str):
+                # Step 6 owns 70% of the overall pipeline; schedule DB updates
+                # from the synchronous FFmpeg loop without blocking the renderer.
+                loop.call_soon_threadsafe(
+                    asyncio.create_task,
+                    self._update_progress(int(25 + ratio * 70), message),
+                )
+
             result = run_step6_video(
                 clips_with_titles_path=titles_path,
                 collections_path=collections_path,
@@ -523,7 +534,8 @@ class PipelineAdapter:
                 output_dir=self.project_paths["output_dir"],
                 clips_dir=str(self.project_paths["clips_dir"]),
                 collections_dir=str(self.project_paths["collections_dir"]),
-                metadata_dir=self.project_paths["metadata_dir"]
+                metadata_dir=self.project_paths["metadata_dir"],
+                progress_callback=render_progress,
             )
             
             return {"status": "success", "result": result}

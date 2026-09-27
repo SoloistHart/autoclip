@@ -16,6 +16,7 @@ def test_extract_clip_command_is_browser_safe_h264():
     assert cmd[0] == "ffmpeg"
     assert cmd[cmd.index("-ss") + 1] == "00:01:02.000"
     assert cmd[cmd.index("-t") + 1] == "12.500"
+    assert cmd[cmd.index("-vf") + 1] == "scale=1920:1920:force_original_aspect_ratio=decrease"
     assert cmd[cmd.index("-c:v") + 1] == "libx264"
     assert cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
     assert cmd[cmd.index("-c:a") + 1] == "aac"

@@ -1,4 +1,18 @@
 services:
+  # React frontend served by Nginx; proxies /api to the backend.
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend.Dockerfile
+    image: autoclip-frontend:local
+    container_name: autoclip-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      autoclip:
+        condition: service_healthy
+
   # Redis服务
   redis:
     image: redis:7-alpine
@@ -26,7 +40,6 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"  # 后端API
-      - "3000:3000"  # 前端界面
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -50,6 +63,8 @@ services:
       - UPLOAD_POST_API_KEY=${UPLOAD_POST_API_KEY:-}
       - UPLOAD_POST_USER=${UPLOAD_POST_USER:-}
       - AUTOCLIP_YT_SUBTITLE_LANGS=${AUTOCLIP_YT_SUBTITLE_LANGS:-}
+      - AUTOCLIP_YT_COOKIES_FILE=/app/data/www.youtube.com_cookies.txt
+      - AUTOCLIP_WHISPER_DEVICE=${AUTOCLIP_WHISPER_DEVICE:-auto}
     depends_on:
       redis:
         condition: service_healthy
@@ -91,6 +106,10 @@ services:
       - UPLOAD_POST_API_KEY=${UPLOAD_POST_API_KEY:-}
       - UPLOAD_POST_USER=${UPLOAD_POST_USER:-}
       - AUTOCLIP_YT_SUBTITLE_LANGS=${AUTOCLIP_YT_SUBTITLE_LANGS:-}
+      - AUTOCLIP_YT_COOKIES_FILE=/app/data/www.youtube.com_cookies.txt
+      - AUTOCLIP_WHISPER_DEVICE=${AUTOCLIP_WHISPER_DEVICE:-auto}
+    healthcheck:
+      disable: true
     # 任务通过 celery_app.task_routes 被路由到专用队列；不带 -Q 的 worker 只消费默认的
     # `celery` 队列，流水线任务会一直堆在 `processing` 里没人执行，项目永远卡在处理中。
     command: celery -A backend.core.celery_app worker --loglevel=info --concurrency=2 -Q celery,processing,video,notification,upload
@@ -118,32 +137,13 @@ services:
       - DEBUG=false
       - LOG_LEVEL=INFO
     command: celery -A backend.core.celery_app beat --loglevel=info
+    healthcheck:
+      disable: true
     depends_on:
       redis:
         condition: service_healthy
       autoclip:
         condition: service_healthy
-
-  # Flower监控服务（可选）
-  flower:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: autoclip:local
-    container_name: autoclip-flower
-    restart: unless-stopped
-    ports:
-      - "5555:5555"
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=sqlite:///./data/autoclip.db
-      - ENVIRONMENT=production
-    command: celery -A backend.core.celery_app flower --port=5555
-    depends_on:
-      redis:
-        condition: service_healthy
-      celery-worker:
-        condition: service_started
 
 volumes:
   redis_data:

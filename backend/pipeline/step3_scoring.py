@@ -48,6 +48,31 @@ class ClipScorer:
         prompt_files_to_use = prompt_files if prompt_files is not None else PROMPT_FILES
         with open(prompt_files_to_use['recommendation'], 'r', encoding='utf-8') as f:
             self.recommendation_prompt = f.read()
+        from .quality import generation_prompt_hint
+        self.recommendation_prompt += generation_prompt_hint(self.metadata_dir)
+        duration_preference = "auto"
+        custom_duration = 60
+        try:
+            from ..core.llm_manager import get_llm_manager
+            manager = get_llm_manager()
+            duration_preference = str(manager.get_processing_setting("short_duration_preference") or "auto")
+            custom_duration = int(manager.get_processing_setting("short_duration_custom_sec") or 60)
+        except Exception:
+            pass
+        from ..services.shorts_subtitles import duration_range
+        duration_lo, duration_hi = duration_range(duration_preference, custom_duration)
+        self.recommendation_prompt += f"""
+--- SHORT-FORM SUITABILITY ---
+In addition to final_score, evaluate standalone short-form suitability. Return numeric 0.0-1.0 fields:
+hook_score, standalone_score, emotional_score, educational_score, ending_score, duration_fit_score, short_form_score.
+Also return:
+complete_thought (boolean),
+short_start_time,
+short_end_time,
+short_duration_sec.
+The Short target duration is {duration_lo:.0f}-{duration_hi:.0f} seconds. A complete thought is more important than hitting the exact target. The recommended range MUST stay inside the candidate clip's start_time/end_time. Use only timestamp boundaries that exist in the provided transcript/candidate context; do not invent unrelated time ranges.
+short_form_score is the weighted suitability for TikTok/Reels/Shorts, not raw content quality. Prefer moments with a clear hook, enough context to stand alone, strong payoff, a satisfying ending, and a natural duration.
+"""
 
         from .quality import load_srt_chunks
         self._srt_entries = load_srt_chunks(self.metadata_dir) if self.metadata_dir else []
@@ -131,13 +156,50 @@ class ClipScorer:
             response = self.llm_client.call_with_retry(self.recommendation_prompt, input_for_llm)
             parsed_list = self.llm_client.parse_json_response(response)
             scored, stats = align_scores(clips, parsed_list)
+            self._apply_short_recommendations(scored)
             logger.info(f"  > 评分对齐: 命中 {stats['matched']}，兜底 {stats['fallback']}")
             return scored
 
         except Exception as e:
             logger.error(f"LLM批量评估失败: {e}")
             scored, _ = align_scores(clips, [])
+            self._apply_short_recommendations(scored)
             return scored
+
+    def _apply_short_recommendations(self, clips: List[Dict[str, Any]]) -> None:
+        """Validate model-proposed Short ranges; never let them escape the original clip."""
+        try:
+            from ..core.llm_manager import get_llm_manager
+            manager = get_llm_manager()
+            preference = str(manager.get_processing_setting("short_duration_preference") or "auto")
+            custom = int(manager.get_processing_setting("short_duration_custom_sec") or 60)
+            from ..services.shorts_subtitles import clamp_short_range, duration_range
+            entries = self._srt_entries or []
+            from .quality import short_publish_check
+            min_duration, max_duration = duration_range(preference, custom)
+            for clip in clips:
+                recommendation = clamp_short_range(
+                    clip,
+                    clip.get("short_start_time"),
+                    clip.get("short_end_time"),
+                    entries,
+                    preference,
+                    custom,
+                )
+                if recommendation:
+                    clip.update(recommendation)
+                else:
+                    clip["short_duration_source"] = "clip"
+
+                publishable, reasons = short_publish_check(
+                    clip,
+                    min_duration=min_duration,
+                    max_duration=max_duration,
+                )
+                clip["short_publishable"] = publishable
+                clip["short_publish_rejection_reasons"] = reasons
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(f"Short 时长建议校验跳过: {exc}")
 
     def save_scores(self, scored_clips: List[Dict], output_path: Path):
         """保存评分结果"""
@@ -164,14 +226,22 @@ def run_step3_scoring(timeline_path: Path, metadata_dir: Path = None, output_pat
     if metadata_dir is None:
         metadata_dir = METADATA_DIR
 
-    from .quality import load_profile, select_clips, save_report
+    from .quality import load_profile, select_clips, select_short_candidates, save_report
 
     scorer = ClipScorer(prompt_files, metadata_dir=metadata_dir)
     scored_clips = scorer.score_clips(timeline_data)
 
     profile = load_profile(metadata_dir)
     threshold = resolve_min_score_threshold()
-    high_score_clips, select_info = select_clips(scored_clips, threshold, profile)
+    requested_count = 0
+    try:
+        from ..core.llm_manager import get_llm_manager
+        requested_count = int(get_llm_manager().get_processing_setting("processing_clip_count") or 0)
+    except Exception:
+        requested_count = 0
+    high_score_clips, select_info = select_clips(scored_clips, threshold, profile, requested_count=requested_count)
+    short_candidates = select_short_candidates(scored_clips, requested_count=requested_count)
+    select_info["short_candidates"] = len(short_candidates)
     select_info["threshold"] = threshold
     save_report({"step3": select_info}, metadata_dir)
     logger.info(
@@ -181,6 +251,7 @@ def run_step3_scoring(timeline_path: Path, metadata_dir: Path = None, output_pat
 
     all_scored_path = metadata_dir / "step3_all_scored.json"
     scorer.save_scores(scored_clips, all_scored_path)
+    scorer.save_scores(short_candidates, metadata_dir / "step3_short_candidates.json")
 
     if output_path is None:
         output_path = metadata_dir / "step3_high_score_clips.json"

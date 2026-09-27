@@ -1,5 +1,11 @@
-# 日志文件
+# Logs and local runtime output
 logs/
+/uploads/
+NUL
+*-tmp.json
+SETUP-NOTES.md
+build.log
+
 *.log
 backend.log
 celery.log
@@ -62,8 +68,12 @@ data/autoclip.db
 data/progress.db
 data/*.json
 data/*.port
+data/www.youtube.com_cookies.txt
 
-# 项目数据目录（包含用户上传的视频和生成的文件）
+# Project/runtime data — never commit local media, generated outputs, or CUDA libraries
+data/
+!data/.gitkeep
+
 data/projects/
 data/uploads/
 data/temp/

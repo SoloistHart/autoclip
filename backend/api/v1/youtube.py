@@ -27,6 +27,35 @@ download_tasks = {}
 # 一次请求过多字幕语言会触发 YouTube 的 HTTP 429 并让整次下载失败；
 # 默认只请求中英文，可用 AUTOCLIP_YT_SUBTITLE_LANGS（逗号分隔）覆盖。
 DEFAULT_SUBTITLE_LANGS = ['zh-Hans', 'zh', 'en']
+YOUTUBE_COOKIE_FILE_BROWSER = 'cookiefile'
+
+
+def get_youtube_cookie_file() -> Optional[str]:
+    """Return the configured Docker-mounted YouTube cookie file, if readable."""
+    configured = os.getenv('AUTOCLIP_YT_COOKIES_FILE', '').strip()
+    if not configured:
+        return None
+    path = Path(configured).expanduser()
+    if path.is_file() and os.access(path, os.R_OK):
+        return str(path)
+    return None
+
+
+def apply_youtube_cookies(options: dict, browser: Optional[str]) -> None:
+    """Apply either a Docker cookie file or a browser cookie source to yt-dlp."""
+    if not browser or browser.lower() == 'none':
+        return
+    if browser.lower() == YOUTUBE_COOKIE_FILE_BROWSER:
+        cookie_file = get_youtube_cookie_file()
+        if not cookie_file:
+            raise RuntimeError(
+                'Docker YouTube cookie file is not configured or is unreadable. '
+                'Place youtube-cookies.txt in the AutoClip data directory and restart AutoClip.'
+            )
+        options['cookiefile'] = cookie_file
+        logger.info('Using configured Docker YouTube cookie file')
+        return
+    options['cookiesfrombrowser'] = (browser.lower(),)
 
 
 def get_subtitle_langs() -> list:
@@ -118,8 +147,18 @@ async def parse_youtube_video(
                 '--no-cache-dir'
             ]
             
-            if browser:
-                cmd.extend(['--cookies-from-browser', browser.lower()])
+            if browser and browser.lower() != 'none':
+                if browser.lower() == YOUTUBE_COOKIE_FILE_BROWSER:
+                    cookie_file = get_youtube_cookie_file()
+                    if not cookie_file:
+                        raise RuntimeError(
+                            'Docker YouTube cookie file is not configured or is unreadable. '
+                            'Place youtube-cookies.txt in the AutoClip data directory and restart AutoClip.'
+                        )
+                    cmd.extend(['--cookies', cookie_file])
+                    logger.info('Using configured Docker YouTube cookie file')
+                else:
+                    cmd.extend(['--cookies-from-browser', browser.lower()])
 
             # 可选兜底客户端，规避 SABR
             yt_client = (client or os.getenv('AUTOCLIP_YT_CLIENT', '')).strip().lower()
@@ -207,8 +246,7 @@ async def create_youtube_download_task(request: YouTubeDownloadRequest):
             'cachedir': False,
         }
         
-        if request.browser:
-            ydl_opts['cookiesfrombrowser'] = (request.browser.lower(),)
+        apply_youtube_cookies(ydl_opts, request.browser)
 
         # 可选兜底客户端
         yt_client_env = os.getenv('AUTOCLIP_YT_CLIENT', '').strip().lower()
@@ -408,10 +446,14 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
         # 设置下载选项
         ydl_opts = {
             'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-            'writesubtitles': True,
-            'writeautomaticsub': True,  # 下载自动生成的字幕
-            'subtitleslangs': get_subtitle_langs(),
-            'subtitlesformat': 'srt',
+            # Do not fetch YouTube subtitles as part of the video download.
+            # YouTube can return HTTP 429 for subtitle tracks even when the
+            # actual video/audio formats are downloadable. If subtitle
+            # retrieval is coupled to ydl.download(), that 429 aborts the
+            # entire download and leaves the UI stuck at 30%.
+            # Subtitle generation/fallback is handled separately below.
+            'writesubtitles': False,
+            'writeautomaticsub': False,
             'outtmpl': str(download_dir / '%(title)s.%(ext)s'),
             'noplaylist': True,
             'quiet': True,
@@ -421,8 +463,40 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
             'cachedir': False,
         }
         
-        if request.browser:
-            ydl_opts['cookiesfrombrowser'] = (request.browser.lower(),)
+        apply_youtube_cookies(ydl_opts, request.browser)
+
+        # Report yt-dlp's real download progress instead of leaving the UI
+        # parked at the fixed 30% "downloading" marker.
+        last_reported_percent = -1
+
+        def download_progress_hook(status):
+            nonlocal last_reported_percent
+            if status.get('status') != 'downloading':
+                return
+
+            total = status.get('total_bytes') or status.get('total_bytes_estimate')
+            downloaded = status.get('downloaded_bytes', 0)
+            if not total:
+                return
+
+            percent = max(0.0, min(100.0, downloaded * 100.0 / total))
+            ui_progress = 30.0 + (percent * 0.30)
+            rounded = int(percent)
+            if rounded <= last_reported_percent:
+                return
+            last_reported_percent = rounded
+
+            message = f"正在下载视频... {percent:.0f}%"
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    update_project_download_progress(project_id, ui_progress, message),
+                    loop
+                )
+                future.result(timeout=5)
+            except Exception as progress_error:
+                logger.debug(f"更新YouTube实时下载进度失败: {progress_error}")
+
+        ydl_opts['progress_hooks'] = [download_progress_hook]
 
         # 可选兜底客户端
         yt_client_env = os.getenv('AUTOCLIP_YT_CLIENT', '').strip().lower()
@@ -501,9 +575,11 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
                     subtitle_path = None
                     subtitle_error = whisper_error
             except Exception as e:
-                logger.warning("生成字幕过程中发生未知错误: %s", type(e).__name__)
+                # Keep the full traceback: unexpected errors here can otherwise
+                # look like a generic Whisper failure and hide the real cause.
+                logger.exception("生成字幕过程中发生未知错误: %s", e)
                 subtitle_path = None
-                subtitle_error = "本地 Whisper 生成字幕失败。请到「设置 → 转写」确认模型已下载，并检查视频有可播放的音轨。"
+                subtitle_error = f"本地 Whisper 生成字幕失败: {e}"
         
         logger.info(f"下载完成 - 视频文件: {video_path}, 字幕文件: {subtitle_path}")
         
@@ -548,7 +624,6 @@ async def process_youtube_download_task(task_id: str, request: YouTubeDownloadRe
             
             # 移动视频文件到项目目录
             import shutil
-            from pathlib import Path
             
             if video_path:
                 video_file_path = Path(video_path)
@@ -695,8 +770,7 @@ async def _try_download_with_different_formats(url: str, download_dir: Path, bro
                 'config_locations': [],
             }
             
-            if browser:
-                ydl_opts['cookiesfrombrowser'] = (browser.lower(),)
+            apply_youtube_cookies(ydl_opts, browser)
             
             def download_sync(url, ydl_opts):
                 with sanitized_yt_env():
@@ -754,8 +828,7 @@ async def _try_download_with_different_langs(url: str, download_dir: Path, brows
                 'config_locations': [],
             }
             
-            if browser:
-                ydl_opts['cookiesfrombrowser'] = (browser.lower(),)
+            apply_youtube_cookies(ydl_opts, browser)
             
             def download_sync(url, ydl_opts):
                 with sanitized_yt_env():
@@ -790,8 +863,7 @@ async def _try_extract_from_metadata(url: str, download_dir: Path, browser: Opti
             'config_locations': [],
         }
         
-        if browser:
-            ydl_opts['cookiesfrombrowser'] = (browser.lower(),)
+        apply_youtube_cookies(ydl_opts, browser)
         
         def extract_info_sync(url, ydl_opts):
             with sanitized_yt_env():

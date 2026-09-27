@@ -2,6 +2,7 @@
 视频处理工具
 """
 import subprocess
+import os
 import json
 import logging
 import re
@@ -132,6 +133,7 @@ class VideoProcessor:
         output_path: Path,
         start_time: str,
         duration: float,
+        video_encoder: str = "libx264",
     ) -> List[str]:
         """切片编码成应用内 <video> 能播的 H.264 + AAC。
 
@@ -147,9 +149,12 @@ class VideoProcessor:
             "-t", f"{duration:.3f}",
             "-map", "0:v:0",
             "-map", "0:a:0?",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            "-crf", "23",
+            # Cap source resolution at 1920x1920 before H.264 encoding. This keeps
+            # 4K/AV1 imports from spending minutes encoding every clip at 4K while
+            # preserving native 1080x1920 vertical sources for Shorts/TikTok export.
+            "-vf", "scale=1920:1920:force_original_aspect_ratio=decrease",
+            "-c:v", video_encoder,
+            *(["-preset", "p4", "-cq", "23"] if video_encoder == "h264_nvenc" else ["-preset", "veryfast", "-crf", "23"]),
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "128k",
@@ -189,8 +194,9 @@ class VideoProcessor:
             
             # 转成浏览器能解的 H.264/yuv420p + AAC，并把 moov 放到文件头。
             ffmpeg_bin = get_ffmpeg_path()
+            video_encoder = os.getenv("AUTOCLIP_VIDEO_ENCODER", "libx264")
             cmd = VideoProcessor.build_extract_clip_command(
-                ffmpeg_bin, input_video, output_path, ffmpeg_start_time, duration,
+                ffmpeg_bin, input_video, output_path, ffmpeg_start_time, duration, video_encoder,
             )
             
             # 执行命令
@@ -375,7 +381,8 @@ class VideoProcessor:
             logger.error(f"获取视频信息异常: {str(e)}")
             return {}
     
-    def batch_extract_clips(self, input_video: Path, clips_data: List[Dict]) -> List[Path]:
+    def batch_extract_clips(self, input_video: Path, clips_data: List[Dict], progress_callback=None,
+                            progress_offset: float = 0.0, progress_span: float = 1.0) -> List[Path]:
         """
         批量提取视频片段
         
@@ -388,7 +395,8 @@ class VideoProcessor:
         """
         successful_clips = []
         
-        for clip_data in clips_data:
+        total = max(1, len(clips_data))
+        for index, clip_data in enumerate(clips_data):
             clip_id = clip_data['id']
             title = clip_data.get('title', f"片段_{clip_id}")
             start_time = clip_data['start_time']
@@ -412,10 +420,13 @@ class VideoProcessor:
                 logger.info(f"切片 {clip_id} 提取成功")
             else:
                 logger.error(f"切片 {clip_id} 提取失败")
+            if progress_callback:
+                progress_callback(progress_offset + ((index + 1) / total) * progress_span, f"Rendering clip {index + 1}/{total}")
         
         return successful_clips
-    
-    def create_collections_from_metadata(self, collections_data: List[Dict]) -> List[Dict]:
+
+    def create_collections_from_metadata(self, collections_data: List[Dict], progress_callback=None,
+                                         progress_offset: float = 0.0, progress_span: float = 1.0) -> List[Dict]:
         """
         根据元数据创建合集
         
@@ -427,7 +438,8 @@ class VideoProcessor:
         """
         successful_collections = []
         
-        for collection_data in collections_data:
+        total = max(1, len(collections_data))
+        for index, collection_data in enumerate(collections_data):
             collection_id = collection_data['id']
             collection_title = collection_data.get('collection_title', f'合集_{collection_id}')
             clip_ids = collection_data['clip_ids']
@@ -479,7 +491,11 @@ class VideoProcessor:
                     }
                     successful_collections.append(collection_info)
                     logger.info(f"成功创建合集 {collection_id}: {output_path}")
+            if progress_callback:
+                progress_callback(progress_offset + ((index + 1) / total) * progress_span, f"Rendering collection {index + 1}/{total}")
             else:
                 logger.warning(f"合集 {collection_id} 没有找到任何有效的切片文件")
+            if progress_callback:
+                progress_callback(progress_offset + ((index + 1) / total) * progress_span, f"Rendering collection {index + 1}/{total}")
         
         return successful_collections

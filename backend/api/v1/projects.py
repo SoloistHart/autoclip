@@ -701,9 +701,10 @@ async def resume_processing(
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         
-        # 检查项目状态
-        if project.status.value not in ["failed", "processing", "pending"]:
-            raise HTTPException(status_code=400, detail="Project is not in failed, processing, or pending status")
+        # 检查项目状态。允许 completed，因为项目状态可能已被一次
+        # 中断的恢复请求提前标记为完成，但实际 Step 6 产物仍可能缺失。
+        if project.status.value not in ["failed", "processing", "pending", "completed"]:
+            raise HTTPException(status_code=400, detail="Project is not in failed, processing, pending, or completed status")
         
         # 获取SRT文件路径（如果需要）
         srt_path = None
@@ -1412,6 +1413,7 @@ class ClipExportRequest(BaseModel):
     subtitles: bool = True
     title_card: bool = True
     layout: Optional[str] = Field(None, description="覆盖预设画幅：blur / crop / fit / none")
+    hook_text: Optional[str] = Field(None, description="短视频前 2–3 秒显示的短视觉 Hook")
 
 
 @router.get("/{project_id}/export-presets")
@@ -1430,6 +1432,7 @@ async def start_clip_export(project_id: str, clip_id: str, body: ClipExportReque
     return start_export(ExportRequest(
         project_id=project_id, clip_id=clip_id, preset=body.preset,
         subtitles=body.subtitles, title_card=body.title_card, layout=body.layout,
+        hook_text=body.hook_text,
     ))
 
 

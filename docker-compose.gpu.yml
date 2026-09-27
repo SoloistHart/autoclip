@@ -1,0 +1,15 @@
+services:
+  autoclip:
+    gpus: all
+    environment:
+      LD_LIBRARY_PATH: /opt/autoclip-cuda
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    volumes:
+      - ./data/cuda-libs:/opt/autoclip-cuda:ro
+  celery-worker:
+    gpus: all
+    environment:
+      LD_LIBRARY_PATH: /opt/autoclip-cuda
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    volumes:
+      - ./data/cuda-libs:/opt/autoclip-cuda:ro

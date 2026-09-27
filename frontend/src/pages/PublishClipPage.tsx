@@ -87,6 +87,7 @@ const PublishClipPage: React.FC = () => {
   const [subtitles, setSubtitles] = useState(true)
   const [titleCard, setTitleCard] = useState(true)
   const [savingFile, setSavingFile] = useState(false)
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [phase, setPhase] = useState<'idle' | 'running' | 'waiting' | 'done' | 'partial' | 'failed' | 'scheduled'>('idle')
   const [percent, setPercent] = useState(0)
   const [error, setError] = useState<string | null>(null)
@@ -320,6 +321,7 @@ const PublishClipPage: React.FC = () => {
     if (savingFile || phase === 'running' || phase === 'waiting') return
     setSavingFile(true)
     setError(null)
+    setPreviewUrl(null)
     setPercent(8)
     try {
       const started = await projectApi.startClipExport(projectId, clipId, {
@@ -332,6 +334,8 @@ const PublishClipPage: React.FC = () => {
         const job = await projectApi.getExportJob(projectId, started.job_id)
         setPercent(job.percent ?? 20)
         if (job.status === 'completed') {
+          const preview = `/api/v1/projects/${encodeURIComponent(projectId)}/exports/${encodeURIComponent(started.job_id)}/download`
+          setPreviewUrl(preview)
           await projectApi.downloadExport(projectId, started.job_id)
           setPercent(100)
           return
@@ -484,6 +488,14 @@ const PublishClipPage: React.FC = () => {
         </p>
       )}
       {busy && <div style={{ marginTop: 16 }}><ProgressLine percent={percent} /></div>}
+      {previewUrl && (
+        <div style={{ marginTop: 20 }}>
+          <div className="ac-meta" style={{ marginBottom: 8 }}>{t("成片预览")}</div>
+          <div style={{ width: 'min(100%, 360px)', aspectRatio: '9 / 16', background: 'var(--ac-thumb)', borderRadius: 12, overflow: 'hidden', border: '1px solid var(--ac-line)' }}>
+            <video src={previewUrl} controls playsInline style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+          </div>
+        </div>
+      )}
       {summary && <p style={{ marginTop: 12, color: 'var(--ac-sub)', fontSize: 13 }}>{summary}</p>}
       {results.length > 0 && (
         <div style={{ marginTop: 8 }}>

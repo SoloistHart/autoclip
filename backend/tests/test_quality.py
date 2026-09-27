@@ -7,7 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from backend.pipeline.quality import (
     align_scores, excerpt_between, profile_for, refine_timeline, select_clips,
-    to_seconds, to_srt_time,
+    short_publish_check, select_short_candidates, to_seconds, to_srt_time,
 )
 
 
@@ -81,6 +81,38 @@ def test_align_scores_normalizes_0_10_scale():
     clips = [{"outline": "甲"}]
     scored, _ = align_scores(clips, [{"outline": "甲", "final_score": 8, "recommend_reason": "x"}])
     assert scored[0]["final_score"] == 0.8
+
+
+def test_short_publish_check_requires_complete_thought_and_core_dimensions():
+    base = {
+        "complete_thought": False,
+        "hook_score": 0.9,
+        "standalone_score": 0.9,
+        "entry_point_score": 0.9,
+        "payoff_score": 0.9,
+        "ending_score": 0.9,
+        "short_form_score": 0.9,
+        "short_start_time": "00:00:00,000",
+        "short_end_time": "00:00:45,000",
+        "short_duration_sec": 45,
+    }
+    ok, reasons = short_publish_check(base)
+    assert not ok
+    assert "incomplete_thought" in reasons
+
+    base["complete_thought"] = True
+    ok, reasons = short_publish_check(base)
+    assert ok and reasons == []
+
+
+def test_select_short_candidates_requires_publishable_structure_and_ranks_by_short_score():
+    clips = [
+        {"id": "1", "complete_thought": True, "hook_score": .9, "standalone_score": .9, "entry_point_score": .9, "payoff_score": .9, "ending_score": .9, "short_form_score": .95, "short_start_time": "00:00:00,000", "short_end_time": "00:00:45,000", "short_duration_sec": 45},
+        {"id": "2", "complete_thought": True, "hook_score": .9, "standalone_score": .9, "entry_point_score": .9, "payoff_score": .4, "ending_score": .9, "short_form_score": .9, "short_start_time": "00:00:00,000", "short_end_time": "00:00:45,000", "short_duration_sec": 45},
+    ]
+    candidates = select_short_candidates(clips)
+    assert [c["id"] for c in candidates] == ["1"]
+    assert candidates[0]["candidate_structure"]["payoff"] == .9
 
 
 def test_select_clips_keeps_top_k_when_all_below_threshold():

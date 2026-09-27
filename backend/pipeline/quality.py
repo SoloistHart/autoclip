@@ -122,6 +122,29 @@ def profile_from_srt(srt_entries: Sequence[Dict[str, Any]]) -> DurationProfile:
     return profile_for(total)
 
 
+def generation_language(metadata_dir: Optional[Path] = None) -> str:
+    """Read the saved generation-language preference without coupling pipeline steps to the API layer."""
+    try:
+        from ..core.llm_manager import get_llm_manager
+        value = get_llm_manager().get_processing_setting("generation_language")
+        if value in {"original", "english", "chinese", "detect"}:
+            return value
+    except Exception:
+        pass
+    return "original"
+
+
+def generation_prompt_hint(metadata_dir: Optional[Path] = None) -> str:
+    value = generation_language(metadata_dir)
+    labels = {
+        "original": "Keep generated titles, summaries, reasons and collections in the source content language.",
+        "english": "STRICT LANGUAGE RULE: Generate ALL titles, summaries, descriptions, recommendation reasons, collection titles, and collection summaries in English only. Do not output Chinese or any other language for generated metadata. Preserve quoted transcript text as source language only when quoting the transcript.",
+        "chinese": "Generate titles, summaries, recommendation reasons and collection text in Simplified Chinese. Preserve quoted transcript text as source language.",
+        "detect": "Detect the dominant source language and generate titles, summaries, recommendation reasons and collection text in that language.",
+    }
+    return f"\n\n--- GENERATION LANGUAGE ---\n{labels[value]}\n"
+
+
 def save_profile(profile: DurationProfile, metadata_dir: Path) -> Path:
     path = Path(metadata_dir) / PROFILE_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -456,13 +479,31 @@ def align_scores(clips: Sequence[Dict[str, Any]], llm_results: Any,
         score = _to_score(r.get("final_score")) if r else None
         if score is None:
             c["final_score"] = default_score
-            c["recommend_reason"] = (r or {}).get("recommend_reason") or "未评分（自动兜底）"
+            c["recommend_reason"] = (r or {}).get("recommend_reason") or "Not scored (automatic fallback)"
             c["score_source"] = "fallback"
+            c["short_form_score"] = default_score
             stats["fallback"] += 1
         else:
             c["final_score"] = score
             c["recommend_reason"] = r.get("recommend_reason") or ""
             c["score_source"] = "llm"
+            # Preserve short-form suitability dimensions when the model returns them.
+            for field in ("hook_score", "standalone_score", "entry_point_score", "context_score", "development_score", "payoff_score", "emotional_score", "educational_score", "ending_score", "duration_fit_score", "short_form_score"):
+                value = _to_score(r.get(field)) if r else None
+                if value is not None:
+                    c[field] = value
+            if r:
+                for field in ("complete_thought", "short_start_time", "short_end_time", "short_duration_sec"):
+                    if field in r:
+                        c[field] = r[field]
+            deterministic_short_score = compute_short_structure_score(c)
+            if deterministic_short_score is not None:
+                c["short_form_score"] = deterministic_short_score
+            elif c.get("short_form_score") is None:
+                dims = [c.get(k) for k in ("hook_score", "standalone_score", "entry_point_score", "context_score", "development_score", "payoff_score", "emotional_score", "educational_score", "ending_score", "duration_fit_score")]
+                dims = [float(v) for v in dims if v is not None]
+                if dims:
+                    c["short_form_score"] = round(sum(dims) / len(dims), 2)
             stats["matched"] += 1
         out.append(c)
     return out, stats
@@ -482,21 +523,143 @@ def _to_score(v: Any) -> Optional[float]:
     return round(max(0.0, min(1.0, f)), 2)
 
 
+def compute_short_structure_score(clip: Dict[str, Any]) -> Optional[float]:
+    """Compute a deterministic Short score from structural dimensions.
+
+    The LLM supplies the dimensions; this weighted aggregate prevents a single
+    catchy hook from overpowering context, entry, development, and payoff.
+    """
+    weights = {
+        "hook_score": 0.15,
+        "standalone_score": 0.15,
+        "entry_point_score": 0.10,
+        "context_score": 0.10,
+        "development_score": 0.10,
+        "payoff_score": 0.15,
+        "ending_score": 0.10,
+        "emotional_score": 0.05,
+        "educational_score": 0.05,
+        "duration_fit_score": 0.05,
+    }
+    values = {key: _to_score(clip.get(key)) for key in weights}
+    if sum(value is not None for value in values.values()) < 6:
+        return None
+    total_weight = sum(weight for key, weight in weights.items() if values[key] is not None)
+    if total_weight <= 0:
+        return None
+    return round(sum(values[key] * weight for key, weight in weights.items() if values[key] is not None) / total_weight, 2)
+
+
+SHORT_PUBLISH_THRESHOLDS: Dict[str, float] = {
+    "hook_score": 0.60,
+    "standalone_score": 0.65,
+    "entry_point_score": 0.60,
+    "payoff_score": 0.60,
+    "ending_score": 0.60,
+    "short_form_score": 0.65,
+}
+
+
+def build_short_candidates(scored: Sequence[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Build normalized Short candidates after scoring and range repair.
+
+    The pipeline now treats the Step 3 item as a candidate mother-segment:
+    score -> repair the natural range -> quality-gate -> rank candidates.
+    Raw highlights remain available to the editor, while this list is the
+    contract used by automatic Short publishing.
+    """
+    candidates: List[Dict[str, Any]] = []
+    for clip in scored:
+        candidate = dict(clip)
+        publishable = candidate.get("short_publishable")
+        if publishable is not True:
+            publishable, reasons = short_publish_check(candidate)
+            candidate["short_publishable"] = publishable
+            candidate["short_publish_rejection_reasons"] = reasons
+        if not publishable:
+            continue
+        candidate["candidate_type"] = "short"
+        candidate["candidate_score"] = float(candidate.get("short_form_score") or 0.0)
+        candidate["candidate_structure"] = {
+            "hook": float(candidate.get("hook_score") or 0.0),
+            "context": float(candidate.get("context_score") or 0.0),
+            "development": float(candidate.get("development_score") or 0.0),
+            "payoff": float(candidate.get("payoff_score") or 0.0),
+            "ending": float(candidate.get("ending_score") or 0.0),
+        }
+        candidates.append(candidate)
+    return sorted(candidates, key=lambda c: (-c["candidate_score"], _id_key(c.get("id"))))
+
+
+def select_short_candidates(scored: Sequence[Dict[str, Any]], requested_count: int = 0) -> List[Dict[str, Any]]:
+    """Select publishable Short candidates without changing raw clip selection."""
+    candidates = build_short_candidates(scored)
+    if requested_count > 0:
+        candidates = candidates[:requested_count]
+    return sorted(candidates, key=lambda c: _id_key(c.get("id")))
+
+
+def short_publish_check(
+    clip: Dict[str, Any],
+    min_duration: float = 30.0,
+    max_duration: float = 90.0,
+) -> Tuple[bool, List[str]]:
+    """Return whether a scored clip is safe for automatic Shorts publishing.
+
+    This is intentionally stricter than ordinary highlight selection. A raw
+    highlight may still be useful for a human editor, but AutoClip must not
+    automatically publish a Short that is incomplete, context-dependent, or
+    weakly structured.
+    """
+    reasons: List[str] = []
+
+    if clip.get("complete_thought") is not True:
+        reasons.append("incomplete_thought")
+
+    for field, minimum in SHORT_PUBLISH_THRESHOLDS.items():
+        value = _to_score(clip.get(field))
+        if value is None:
+            reasons.append(f"missing_{field}")
+        elif value < minimum:
+            reasons.append(f"low_{field}")
+
+    if not clip.get("short_start_time") or not clip.get("short_end_time"):
+        reasons.append("missing_short_range")
+
+    duration = clip.get("short_duration_sec")
+    try:
+        duration = float(duration)
+    except (TypeError, ValueError):
+        duration = None
+    if duration is None:
+        reasons.append("missing_short_duration")
+    elif duration < min_duration or duration > max_duration:
+        reasons.append("short_duration_out_of_range")
+
+    return not reasons, reasons
+
+
 def select_clips(scored: Sequence[Dict[str, Any]], threshold: float,
-                 profile: Optional[DurationProfile] = None) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+                 profile: Optional[DurationProfile] = None, requested_count: int = 0) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """
     阈值之上全留；不足 min_keep 按分补齐（标 selected_by=fallback）；超过 max_clips 按分截断。
     返回顺序按 id（时间序）。
     """
     min_keep = profile.min_keep if profile else 2
-    max_clips = profile.max_clips if profile else 12
+    max_clips = requested_count if requested_count > 0 else (profile.max_clips if profile else 12)
     items = [dict(c) for c in scored]
-    ranked = sorted(items, key=lambda c: float(c.get("final_score") or 0), reverse=True)
+    ranked = sorted(items, key=lambda c: float(c.get("short_form_score", c.get("final_score") or 0) or 0), reverse=True)
 
-    chosen = [c for c in ranked if float(c.get("final_score") or 0) >= threshold]
-    for c in chosen:
-        c["selected_by"] = "threshold"
-    fallback = 0
+    if requested_count > 0:
+        chosen = ranked[:max_clips]
+        for c in chosen:
+            c["selected_by"] = "top_n"
+        fallback = 0
+    else:
+        chosen = [c for c in ranked if float(c.get("final_score") or 0) >= threshold]
+        for c in chosen:
+            c["selected_by"] = "threshold"
+        fallback = 0
     if len(chosen) < min_keep:
         for c in ranked:
             if len(chosen) >= min_keep:
@@ -515,6 +678,8 @@ def select_clips(scored: Sequence[Dict[str, Any]], threshold: float,
     info = {
         "threshold": threshold, "candidates": len(items), "selected": len(chosen),
         "fallback_selected": fallback, "truncated": truncated, "min_keep": min_keep, "max_clips": max_clips,
+        "selection_mode": "top_n" if requested_count > 0 else "threshold",
+        "requested_count": requested_count,
     }
     return chosen, info
 

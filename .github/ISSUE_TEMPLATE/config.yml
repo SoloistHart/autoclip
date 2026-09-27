@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📋 当前状态 / 已知问题 / Status & known issues
-    url: https://github.com/zhouxiaoka/autoclip/issues/96
+    url: https://github.com/SoloistHart/autoclip/issues
     about: 提 issue 前先看这里，你的问题可能已经有答案。Check here first.
   - name: 💡 想法 / Ideas
-    url: https://github.com/zhouxiaoka/autoclip/discussions/categories/ideas
+    url: https://github.com/SoloistHart/autoclip/discussions
     about: 希望支持什么、怎么用、想要哪个模型，发到 Discussions，不要开 Issue。
   - name: 🙋 使用提问 / Q&A
-    url: https://github.com/zhouxiaoka/autoclip/discussions/categories/q-a
+    url: https://github.com/SoloistHart/autoclip/discussions
     about: 怎么用、模型怎么选、切片效果怎么调。能复现的故障仍开 Issue。

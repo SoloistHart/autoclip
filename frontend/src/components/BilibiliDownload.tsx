@@ -22,7 +22,9 @@ const BilibiliDownload: React.FC<BilibiliDownloadProps> = ({ onDownloadSuccess }
   const [url, setUrl] = useState('')
   const [projectName, setProjectName] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('')
-  const [selectedBrowser, setSelectedBrowser] = useState<string>('')
+  // Public YouTube videos usually work better without account cookies.
+  // Keep the cookie-file option available for videos that actually require login.
+  const [selectedBrowser, setSelectedBrowser] = useState<string>('none')
   const [categories, setCategories] = useState<VideoCategory[]>([])
   const [loadingCategories, setLoadingCategories] = useState(false)
   const [downloading, setDownloading] = useState(false)
@@ -408,7 +410,7 @@ const BilibiliDownload: React.FC<BilibiliDownloadProps> = ({ onDownloadSuccess }
               </div>
               
               <div>
-                <Text style={{ color: '#ffffff', marginBottom: '12px', display: 'block', fontSize: '16px', fontWeight: 500 }}>{t("浏览器选择（获取AI字幕需要）")}</Text>
+                <Text style={{ color: '#ffffff', marginBottom: '12px', display: 'block', fontSize: '16px', fontWeight: 500 }}>{t("YouTube访问方式")}</Text>
                 <Select
                   placeholder={t("选择浏览器以获取cookie（可选）")}
                   value={selectedBrowser || undefined}
@@ -425,12 +427,14 @@ const BilibiliDownload: React.FC<BilibiliDownloadProps> = ({ onDownloadSuccess }
                   }}
                   disabled={downloading}
                 >
+                  <Select.Option value="none">No cookies (recommended for public videos)</Select.Option>
+                  <Select.Option value="cookiefile">Docker cookie file (for videos requiring login)</Select.Option>
                   <Select.Option value="chrome">Chrome</Select.Option>
                   <Select.Option value="firefox">Firefox</Select.Option>
                   <Select.Option value="safari">Safari</Select.Option>
                   <Select.Option value="edge">Edge</Select.Option>
                 </Select>
-                <Text style={{ color: 'rgba(255, 255, 255, 0.6)', fontSize: '12px', marginTop: '8px', display: 'block' }}>{t("选择浏览器可获取登录状态，用于下载AI字幕。如不选择将只能下载公开字幕。")}</Text>
+                <Text style={{ color: 'rgba(255, 255, 255, 0.6)', fontSize: '12px', marginTop: '8px', display: 'block' }}>{t("公开 YouTube 视频请优先选择 No cookies；需要登录权限的视频再选择 Docker cookie file。")}</Text>
               </div>
               
               <div>

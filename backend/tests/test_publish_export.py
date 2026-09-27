@@ -20,6 +20,17 @@ def data_dir(tmp_path, monkeypatch):
     return d
 
 
+def test_hook_text_wraps_instead_of_truncating():
+    from backend.services.publish_export import _format_hook_text
+
+    hook = _format_hook_text("30 Days Isn't Enough Why Consistency Matters")
+    lines = hook.splitlines()
+    assert len(lines) <= 2
+    assert all(len(line) <= 25 for line in lines)
+    assert "..." not in hook
+    assert "30 Days Isn't Enough" in hook
+
+
 def test_slice_srt_shifts_to_zero():
     from backend.services.publish_export import slice_srt
     entries = [
@@ -32,10 +43,22 @@ def test_slice_srt_shifts_to_zero():
     assert "00:00:02,000 --> 00:00:04,500" in body
 
 
+def test_smart_layout_does_not_reframe_already_vertical_source():
+    from backend.services.publish_export import _layout_filters
+    assert _layout_filters("smart", 1080, 1920, source_aspect=9 / 16) == []
+
+
+def test_smart_layout_reserves_foreground_caption_band(monkeypatch):
+    from backend.services.publish_export import _layout_filters
+    monkeypatch.setenv("AUTOCLIP_FOREGROUND_BOTTOM_CROP_RATIO", "0.12")
+    filters = _layout_filters("smart", 1080, 1920)
+    assert any("crop=iw:ih*(1-0.120):0:0" in part for part in filters)
+
+
 def test_list_presets_has_vertical_and_horizontal():
     from backend.services.publish_export import list_presets
     keys = {p["key"] for p in list_presets()}
-    assert keys == {"douyin", "xiaohongshu", "shorts", "bilibili", "original"}
+    assert keys == {"douyin", "xiaohongshu", "shorts", "tiktok", "bilibili", "original"}
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="本机没有 ffmpeg")

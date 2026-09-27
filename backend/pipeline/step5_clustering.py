@@ -23,11 +23,13 @@ class ClusteringEngine:
         prompt_files_to_use = prompt_files if prompt_files is not None else PROMPT_FILES
         with open(prompt_files_to_use['clustering'], 'r', encoding='utf-8') as f:
             self.clustering_prompt = f.read()
-        
         # 使用传入的metadata_dir或默认值
         if metadata_dir is None:
             metadata_dir = METADATA_DIR
         self.metadata_dir = metadata_dir
+
+        from .quality import generation_prompt_hint
+        self.clustering_prompt += generation_prompt_hint(self.metadata_dir)
     
     def cluster_clips(self, clips_with_titles: List[Dict]) -> List[Dict]:
         """
@@ -181,7 +183,7 @@ class ClusteringEngine:
             collections.append({
                 'id': str(collection_id),
                 'collection_title': theme_titles.get(theme, theme),
-                'collection_summary': theme_summaries.get(theme, f'{theme}相关精彩片段合集'),
+                'collection_summary': theme_summaries.get(theme, f'Collection of clips related to {theme}.'),
                 'clip_ids': clip_ids
             })
             collection_id += 1
@@ -272,8 +274,8 @@ class ClusteringEngine:
         if len(high_score) >= 2:
             collections.append({
                 'id': '1',
-                'collection_title': '精选高分片段',
-                'collection_summary': '评分最高的精彩片段合集',
+                'collection_title': 'Top Highlights',
+                'collection_summary': 'A collection of the highest-scoring clips.',
                 'clip_ids': [clip['id'] for clip in high_score[:MAX_CLIPS_PER_COLLECTION]]
             })
         
@@ -281,8 +283,8 @@ class ClusteringEngine:
         if len(medium_score) >= 2:
             collections.append({
                 'id': '2',
-                'collection_title': '优质内容推荐',
-                'collection_summary': '精选优质内容片段',
+                'collection_title': 'Recommended Highlights',
+                'collection_summary': 'A curated collection of high-quality clips.',
                 'clip_ids': [clip['id'] for clip in medium_score[:MAX_CLIPS_PER_COLLECTION]]
             })
         

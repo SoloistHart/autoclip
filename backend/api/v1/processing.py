@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from ...core.database import get_db
 from ...services.processing_service import ProcessingService
+from ...services.project_service import ProjectService
 
 router = APIRouter()
 
@@ -14,6 +15,11 @@ router = APIRouter()
 def get_processing_service(db: Session = Depends(get_db)) -> ProcessingService:
     """Dependency to get processing service."""
     return ProcessingService(db)
+
+
+def get_project_service(db: Session = Depends(get_db)) -> ProjectService:
+    """Dependency to get project service."""
+    return ProjectService(db)
 
 
 @router.post("/projects/{project_id}/process")
@@ -40,12 +46,33 @@ async def process_project(
 @router.get("/projects/{project_id}/processing-status")
 async def get_processing_status(
     project_id: str,
+    project_service: ProjectService = Depends(get_project_service),
     processing_service: ProcessingService = Depends(get_processing_service)
 ):
     """获取项目处理状态"""
     try:
-        status = processing_service.get_processing_status(project_id)
-        return status
+        project = project_service.get(project_id)
+        if not project:
+            raise HTTPException(status_code=404, detail="Project not found")
+
+        tasks = project.tasks if hasattr(project, "tasks") else []
+        latest_task = None
+        if tasks:
+            latest_task = max(tasks, key=lambda task: task.created_at) if hasattr(tasks[0], "created_at") else tasks[0]
+
+        if not latest_task:
+            return {
+                "status": "pending",
+                "current_step": 0,
+                "total_steps": 6,
+                "step_name": "等待开始",
+                "progress": 0,
+                "error_message": None,
+            }
+
+        return processing_service.get_processing_status(project_id, str(latest_task.id))
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取状态失败: {str(e)}")
 

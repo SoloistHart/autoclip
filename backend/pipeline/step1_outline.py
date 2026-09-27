@@ -70,7 +70,8 @@ class OutlineExtractor:
         from .quality import profile_from_srt, save_profile
         profile = profile_from_srt(srt_data)
         save_profile(profile, self.metadata_dir)
-        outline_prompt = self.outline_prompt + profile.prompt_hint()
+        from .quality import generation_prompt_hint
+        outline_prompt = self.outline_prompt + profile.prompt_hint() + generation_prompt_hint(self.metadata_dir)
         logger.info(f"时长画像: {profile.tier}，总时长 {profile.total_sec:.0f}s，建议话题数 {profile.topics_hint}")
 
         # 2. 基于时间智能分块（短 / 中视频整条一块，长视频 ~30 分钟一块）

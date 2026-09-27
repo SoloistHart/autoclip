@@ -131,6 +131,7 @@ const SettingsPage: React.FC = () => {
   const [analyticsOn, setAnalyticsOn] = useState(isAnalyticsEnabled())
   const [feedbackOpen, setFeedbackOpen] = useState(false)
   const runtime = getRuntimeInfo()
+  const shortDurationPreference = Form.useWatch('short_duration_preference', form) || 'auto'
 
   useEffect(() => { loadData() }, [])
   useEffect(() => { setActive(initialSection) }, [initialSection])
@@ -175,7 +176,11 @@ const SettingsPage: React.FC = () => {
         model_name: settingsData.api?.api_model || 'qwen-plus',
         chunk_size: settingsData.processing?.processing_chunk_size || 5000,
         min_score_threshold: settingsData.processing?.processing_min_score || 0.7,
-        max_clips_per_collection: settingsData.processing?.processing_max_clips || 5
+        max_clips_per_collection: settingsData.processing?.processing_max_clips || 5,
+        output_clip_count: settingsData.processing?.processing_clip_count || 0,
+        generation_language: settingsData.processing?.generation_language || 'english',
+        short_duration_preference: settingsData.processing?.short_duration_preference || 'auto',
+        short_duration_custom_sec: settingsData.processing?.short_duration_custom_sec || 60
       })
       const resolved = PROVIDERS[providerName] ? providerName : 'dashscope'
       setSelectedProvider(resolved)
@@ -225,6 +230,10 @@ const SettingsPage: React.FC = () => {
           processing_chunk_size: toNumber(values.chunk_size, 5000),
           processing_min_score: toNumber(values.min_score_threshold, 0.7),
           processing_max_clips: toNumber(values.max_clips_per_collection, 5),
+          processing_clip_count: toNumber(values.output_clip_count, 0),
+          generation_language: values.generation_language || 'english',
+          short_duration_preference: values.short_duration_preference || 'auto',
+          short_duration_custom_sec: toNumber(values.short_duration_custom_sec, 60),
           processing_max_retries: 3
         },
         logs: { log_level: 'INFO', log_retention_days: 7 }
@@ -389,7 +398,7 @@ const SettingsPage: React.FC = () => {
                 layout="vertical"
                 onFinish={handleSave}
                 requiredMark={false}
-                initialValues={{ llm_provider: 'dashscope', model_name: 'qwen-plus', chunk_size: 5000, min_score_threshold: 0.7, max_clips_per_collection: 5 }}
+                initialValues={{ llm_provider: 'dashscope', model_name: 'qwen-plus', chunk_size: 5000, min_score_threshold: 0.7, max_clips_per_collection: 5, output_clip_count: 0, generation_language: 'english', short_duration_preference: 'auto', short_duration_custom_sec: 60 }}
               >
                 <Form.Item name="llm_provider" hidden><Input /></Form.Item>
                 <div className="ac-rows">
@@ -550,6 +559,41 @@ const SettingsPage: React.FC = () => {
                     </Form.Item>
                     <span className="ac-unit" />
                   </Row>
+                  <Row label={t("最终切片数量")} hint={t("0=自动；设置为5/10/15/20或自定义数量时，按短视频适配度从高到低选Top-N。")}>
+                    <Form.Item name="output_clip_count">
+                      <input className="ac-input ac-input--mono" type="number" min={0} max={100} style={{ width: 120, textAlign: 'right' }} />
+                    </Form.Item>
+                    <span className="ac-unit">{t("条，0=自动")}</span>
+                  </Row>
+                  <Row label={t("生成内容语言")} hint={t("控制AI生成的标题、推荐理由和合集文字；原始语言会保留字幕原文。")}>
+                    <Form.Item name="generation_language">
+                      <Segmented size="sm" ariaLabel={t("生成内容语言")} options={[{ value: 'original', label: t("原文") }, { value: 'english', label: 'English' }, { value: 'chinese', label: '中文' }, { value: 'detect', label: t("自动检测") }]} />
+                    </Form.Item>
+                  </Row>
+                  <Row label={t("Short 目标时长")} hint={t("AI 会优先寻找完整观点，并在这个时长范围内确定 Short 的自然起止点。YouTube Shorts 目前支持最长3分钟。")}>
+                    <Form.Item name="short_duration_preference">
+                      <Segmented
+                        size="sm"
+                        ariaLabel={t("Short 目标时长")}
+                        options={[
+                          { value: 'auto', label: t("自动") },
+                          { value: '15-30', label: '15–30s' },
+                          { value: '30-60', label: '30–60s' },
+                          { value: '60-90', label: '60–90s' },
+                          { value: '90-180', label: '90–180s' },
+                          { value: 'custom', label: t("自定义") },
+                        ]}
+                      />
+                    </Form.Item>
+                  </Row>
+                  {shortDurationPreference === 'custom' && (
+                    <Row label={t("自定义 Short 时长")} hint={t("以目标秒数为中心，AI 会在附近寻找完整观点；范围限制为5–180秒。")}>
+                      <Form.Item name="short_duration_custom_sec">
+                        <input className="ac-input ac-input--mono" type="number" min={5} max={180} step={5} style={{ width: 120, textAlign: 'right' }} />
+                      </Form.Item>
+                      <span className="ac-unit">秒</span>
+                    </Row>
+                  )}
                   <Row label={t("每个合集最多切片")} hint={t("AI 推荐合集时，一个主题最多串几条。")}>
                     <Form.Item name="max_clips_per_collection">
                       <input className="ac-input ac-input--mono" type="number" min={1} max={20} style={{ width: 120, textAlign: 'right' }} />

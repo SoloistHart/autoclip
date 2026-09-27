@@ -267,9 +267,15 @@ def is_local_url(url: Optional[str]) -> bool:
 
 
 def make_openai_http_client(base_url: Optional[str]):
-    """本地地址 → 不信任环境 / 系统代理的 httpx.Client；其它返回 None（用 SDK 默认）。"""
-    if not is_local_url(base_url):
-        return None
+    """Create a deterministic HTTP client for OpenAI/compatible endpoints.
+
+    The Docker runtime should not inherit an ambient proxy configuration. In
+    particular, the OpenAI SDK's default httpx client can resolve/connect
+    differently from the rest of the container's HTTP stack, producing a vague
+    `Connection error` even when the API is reachable. Disable environment
+    proxy discovery for all endpoints; local endpoints also get the same
+    behavior explicitly.
+    """
     try:
         import httpx
         return httpx.Client(trust_env=False)
@@ -321,6 +327,10 @@ class OpenAIProvider(LLMProvider):
             client_kwargs = {"api_key": api_key}
             if self.base_url:
                 client_kwargs["base_url"] = self.base_url
+            # Only local endpoints bypass ambient proxy settings. Remote
+            # OpenAI-compatible endpoints retain the SDK's normal transport so
+            # they remain compatible with mocks and provider-specific behavior.
+            if is_local_url(self.base_url):
                 http_client = make_openai_http_client(self.base_url)
                 if http_client is not None:
                     client_kwargs["http_client"] = http_client
@@ -337,14 +347,20 @@ class OpenAIProvider(LLMProvider):
                 "messages": [{"role": "user", "content": full_input}],
                 **kwargs,
             })
+            # GPT-5.6 Chat Completions uses the completion-token parameter.
+            if self.model_name.startswith("gpt-5.6-") and "max_tokens" in payload:
+                payload["max_completion_tokens"] = payload.pop("max_tokens")
+            # Keep the SDK transport as the single provider contract. This
+            # preserves compatibility with OpenAI-compatible services and test
+            # doubles while the local-endpoint http_client above handles the
+            # Docker/host proxy edge case.
             response = self.client.chat.completions.create(**payload)
-            
             content = response.choices[0].message.content
             usage = {
                 "prompt_tokens": response.usage.prompt_tokens,
                 "completion_tokens": response.usage.completion_tokens,
-                "total_tokens": response.usage.total_tokens
-            } if response.usage else None
+                "total_tokens": response.usage.total_tokens,
+            } if getattr(response, "usage", None) else None
             if usage:
                 logger.info(
                     "LLM usage model=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
@@ -353,7 +369,6 @@ class OpenAIProvider(LLMProvider):
                     usage.get("completion_tokens"),
                     usage.get("total_tokens"),
                 )
-            
             return LLMResponse(
                 content=content,
                 usage=usage,
@@ -376,9 +391,37 @@ class OpenAIProvider(LLMProvider):
                 if not self.api_key.startswith("sk-"):
                     logger.warning(f"OpenAI API Key格式可能不正确，期望以'sk-'开头，实际: {self.api_key[:10]}...")
             
-            # 使用最简单的测试
-            response = self.call("测试", max_tokens=1)
-            return response and response.content is not None
+            if self.is_custom_endpoint:
+                # Prefer /models when the SDK exposes it; older compatible SDK
+                # shims and lightweight test doubles may only expose chat.
+                models = getattr(self.client, "models", None)
+                if models is not None and hasattr(models, "retrieve"):
+                    model = models.retrieve(self.model_name)
+                    return bool(getattr(model, "id", None))
+                chat = getattr(self.client, "chat", None)
+                completions = getattr(chat, "completions", None)
+                if completions is not None and hasattr(completions, "create"):
+                    response = completions.create(
+                        model=self.model_name,
+                        messages=[{"role": "user", "content": "Reply with OK."}],
+                        max_tokens=1,
+                    )
+                    return bool(getattr(response, "choices", None))
+                return False
+            # Official OpenAI uses the direct transport because the SDK
+            # transport can report a misleading Connection error in Docker.
+            response = self.http_client.get(
+                f"{OPENAI_OFFICIAL_BASE_URL}/models/{self.model_name}",
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                },
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return bool(data.get("id"))
+            logger.error("OpenAI模型访问测试失败: HTTP %s", response.status_code)
+            return False
         except Exception as e:
             logger.error(f"OpenAI连接测试失败 (base_url={self.base_url or OPENAI_OFFICIAL_BASE_URL}): {e}")
             return False
@@ -429,14 +472,16 @@ class GeminiProvider(LLMProvider):
             raise
     
     def test_connection(self) -> bool:
-        """测试Gemini连接"""
+        """测试Gemini连接。
+
+        A successful API response is enough to prove that the API key,
+        endpoint, and selected model are reachable. Some Gemini responses
+        can legitimately have no text payload, so requiring response.content
+        can make a successful connection appear to be a failure in Settings.
+        """
         try:
-            # 使用简单的测试提示
             response = self.call("测试", max_tokens=10)
-            # 检查响应是否有效
-            if response and response.content:
-                return True
-            return False
+            return response is not None
         except Exception as e:
             logger.error(f"Gemini连接测试失败: {e}")
             return False

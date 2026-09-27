@@ -34,6 +34,47 @@
 | 支付（海外）| **Stripe** | Phase 3 |
 | 许可/权益 | 自建（订阅状态存 Supabase，桌面端启动校验 + 离线宽限）| 轻量即可 |
 
+## 3. Current Backlog · 短期处理优化
+
+> These items are tracked from real-world Short export validation. Completed items remain visible here so we do not accidentally re-open already-solved work.
+
+### Completed / verified
+
+- [x] **Short clip ending buffer** — vertical Shorts now add a configurable 0.5s post-speech tail by default (`AUTOCLIP_SHORT_END_PADDING_SEC`), capped by source media duration.
+- [x] **Short subtitle cleanup** — vertical Shorts no longer pass the original/source SRT into FFmpeg; only AutoClip's generated word-timed ASS karaoke layer is burned.
+- [x] **Whisper processor / GPU acceleration audit** — local faster-whisper CUDA inference was verified on the RTX 3050 path; CTranslate2 sees CUDA and the persistent container runtime is wired with the required CUDA user-space libraries.
+- [x] **Strict Short quality gate** — incomplete thoughts and invalid/missing Short ranges are rejected before automatic publishing.
+- [x] **Title vs. visual hook separation** — long platform titles remain metadata; Shorts render a bounded 3–8-ish word visual hook with two-line wrapping and a short display window.
+
+### Active QA backlog
+
+- [x] **Caption event-boundary hardening** — prevent adjacent ASS karaoke events from rendering together at exact timestamp boundaries. Add regression coverage for zero-overlap phrase transitions and inspect real rendered frames around transitions.
+- [x] **Whisper caption text normalization** — investigate occasional visually malformed contraction/word rendering (for example the `there's` transition seen during QA), while preserving the authoritative Whisper word timestamps and spoken wording.
+- [x] **Manual export Hook API propagation** — expose `hook_text` through the project export API so manually requested exports use the same short visual hook as automatic Shorts. The renderer already supports it; the API request model is being wired to it.
+- [x] **Caption safe-zone / speaker collision pass** — captions now use a lower safe-zone margin and the smart foreground reserves a clean lower band to reduce collisions with source overlays; placement is kept restrained rather than adding aggressive retention effects.
+- [x] **Burned-in source subtitle mitigation** — smart vertical exports crop a small configurable bottom band from the foreground (`AUTOCLIP_FOREGROUND_BOTTOM_CROP_RATIO`, default 0.12) because embedded source subtitles cannot be removed by disabling an SRT track. The full frame remains in the blurred background.
+
+### Content-selection backlog
+
+- [x] **Candidate-moment architecture** — evolve Step 3 from “score a segment” toward `find candidates → understand → build complete clip → quality gate → select candidates → hook → render`, while retaining the current pipeline as the compatibility path.
+- [x] **Stronger truthful entry-point selection** — score the best *entry point* into a good idea separately from the overall segment score, preferring semantic completeness over arbitrary mid-sentence cold opens.
+- [x] **Payoff-aware ending selection** — make the ending decision explicitly optimize for the idea resolving, not merely the interesting segment ending.
+- [x] **Mini-story structure signals** — add optional hook/context/development/payoff signals to candidate scoring so the system can distinguish an interesting quote from a self-contained short-form story.
+
+### Virality / Retention Engine backlog
+
+> These are optimization signals, not guarantees of virality. The goal is to improve the system's ability to identify clips with stronger attention, retention, shareability, and rewatch potential, then validate those decisions against real audience performance.
+
+- [ ] **Scroll-stop score** — add a dedicated 1–3 second opening score that evaluates immediate attention, clarity, novelty, emotional force, questions, bold-but-truthful claims, and whether the viewer quickly understands why they should keep watching.
+- [ ] **Curiosity-gap score** — detect legitimate unanswered questions or information gaps created by the opening and resolved by the clip, while explicitly penalizing manufactured clickbait or misleading hooks.
+- [ ] **Shareability score** — evaluate whether a clip naturally creates reasons to share: relatability, usefulness, identity/self-recognition, emotional resonance, insight, or constructive disagreement.
+- [ ] **Rewatch / loop score** — identify clips with replay potential through dense insight, surprising payoffs, compact information, strong opening-to-ending relationships, or endings that naturally connect back to the hook.
+- [ ] **Retention-aware candidate ranking** — combine scroll-stop, curiosity, shareability, rewatch, and existing structure scores into the candidate-selection architecture without allowing these newer signals to override hard quality gates such as complete thought and valid duration.
+- [ ] **Audience-performance feedback loop** — ingest real post-publish metrics such as chose-to-view / viewed-vs-swiped, average view duration, average percentage viewed, completion, likes, comments, shares, saves where available, and replay/retention signals; use them to audit and calibrate AutoClip's prediction scores rather than claiming pre-publish virality.
+- [ ] **Performance-based model calibration** — compare predicted candidate scores against real outcomes, identify systematic misses (strong hook but poor retention, high retention but low sharing, etc.), and iteratively adjust scoring weights/prompts using measured data.
+- [ ] **Platform-specific retention profiles** — keep the shared content-quality model, but allow platform-specific scoring/packaging profiles for YouTube Shorts, TikTok, and future platforms when their available performance signals or creative constraints materially differ.
+- [ ] **A/B export experiments** — once enough real traffic exists, support controlled variants of hooks, caption presentation, opening/ending trims, and packaging so performance differences can be measured instead of guessed.
+
 ## 3. 分阶段计划
 
 ### Phase 0 · 固本（约 2–4 周，不碰钱）

@@ -105,7 +105,11 @@ class LLMManager:
             "model_name": "qwen-plus",
             "chunk_size": 5000,
             "min_score_threshold": 0.7,
-            "max_clips_per_collection": 5
+            "max_clips_per_collection": 5,
+            "processing_clip_count": 0,
+            "generation_language": "original",
+            "short_duration_preference": "auto",
+            "short_duration_custom_sec": 60
         }
         
         self._settings_mtime = self._current_settings_mtime()
@@ -143,7 +147,11 @@ class LLMManager:
                         processing = saved_settings.get("processing") or {}
                         for src, dst in (("processing_min_score", "min_score_threshold"),
                                          ("processing_chunk_size", "chunk_size"),
-                                         ("processing_max_clips", "max_clips_per_collection")):
+                                         ("processing_max_clips", "max_clips_per_collection"),
+                                         ("processing_clip_count", "processing_clip_count"),
+                                         ("generation_language", "generation_language"),
+                                         ("short_duration_preference", "short_duration_preference"),
+                                         ("short_duration_custom_sec", "short_duration_custom_sec")):
                             if processing.get(src) is not None:
                                 default_settings[dst] = processing[src]
                     else:

@@ -122,24 +122,28 @@ class SpeechRecognitionError(Exception):
 
 
 def resolve_local_whisper_backend(device: Optional[str] = None) -> Tuple[str, str]:
-    """返回 (device, compute_type)。
+    """Return the Whisper execution backend and compute type.
 
-    默认 CPU + int8。``device="auto"`` 会在探测到 GPU 时改走 CUDA，再叠加
-    ``compute_type="int8"`` 时，faster-whisper 1.2.1 的第一次 ``encode`` /
-    ``generate`` 会抛 RuntimeError。CTranslate2 把特征形状错误报成
-    ValueError，所以这条 RuntimeError 是执行后端，不是坏的 mel。
-    桌面安装不依赖本机 CUDA，因此默认不走这条路径。
-
-    ``AUTOCLIP_WHISPER_DEVICE=cuda`` 用 float16（近期显卡上能跑通的类型）。
-    ``auto`` 交给 CTranslate2 自己的 default，不再强制 int8。
+    ``auto`` is the production default: use CUDA/FP16 when CTranslate2 can
+    actually see an NVIDIA GPU, otherwise fall back to CPU/INT8. Explicit
+    ``cuda`` remains available for deployments that require GPU execution.
     """
     if device is None:
-        device = os.getenv("AUTOCLIP_WHISPER_DEVICE", "cpu")
-    device = (device or "cpu").strip().lower()
+        device = os.getenv("AUTOCLIP_WHISPER_DEVICE", "auto")
+    device = (device or "auto").strip().lower()
+
     if device == "cuda":
         return "cuda", "float16"
+
     if device == "auto":
-        return "auto", "default"
+        try:
+            import ctranslate2
+            if getattr(ctranslate2, "get_cuda_device_count", lambda: 0)() > 0:
+                return "cuda", "float16"
+        except Exception:  # GPU detection must never prevent CPU fallback.
+            pass
+        return "cpu", "int8"
+
     return "cpu", "int8"
 
 
@@ -426,6 +430,74 @@ class SpeechRecognizer:
             end = cls._format_srt_timestamp(seg.get("end", 0.0))
             lines.append(f"{i}\n{start} --> {end}\n{text}\n")
         return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def transcribe_word_timestamps(
+        video_path: Path,
+        start: float = 0.0,
+        end: Optional[float] = None,
+        model_name: str = "base",
+        language: Optional[str] = "en",
+    ) -> List[Dict[str, Any]]:
+        """Transcribe a video range into authoritative word-level timestamps.
+
+        Short-form captions must never invent word timing by dividing an SRT cue.
+        faster-whisper can emit word timestamps directly from the audio.
+        """
+        from backend.services import whisper_runtime
+
+        if not video_path.exists() or video_path.stat().st_size == 0:
+            raise SpeechRecognitionError(f"视频文件不存在或为空: {video_path}")
+        if end is not None and end <= start:
+            raise SpeechRecognitionError("语音转写时间范围无效")
+
+        whisper_runtime.ensure_on_path()
+        if not whisper_runtime.is_installed():
+            raise SpeechRecognitionError("本地 Whisper 运行时未安装")
+        from faster_whisper import WhisperModel
+
+        device, compute_type = resolve_local_whisper_backend()
+        models_dir = str(whisper_runtime.get_models_dir() / "hub")
+        model = WhisperModel(model_name, device=device, compute_type=compute_type, download_root=models_dir)
+        kwargs: Dict[str, Any] = {
+            "language": language or None,
+            "vad_filter": True,
+            "word_timestamps": True,
+            "beam_size": 5,
+            "condition_on_previous_text": False,
+        }
+        if end is not None:
+            kwargs["clip_timestamps"] = f"{max(0.0, start):.3f},{end:.3f}"
+
+        try:
+            segments, _info = model.transcribe(str(video_path), **kwargs)
+            words: List[Dict[str, Any]] = []
+            for segment in segments:
+                for word in (getattr(segment, "words", None) or []):
+                    text = str(getattr(word, "word", "") or "").strip()
+                    ws = getattr(word, "start", None)
+                    we = getattr(word, "end", None)
+                    if not text or ws is None or we is None or we <= ws:
+                        continue
+                    absolute_start = float(ws)
+                    absolute_end = float(we)
+                    if end is not None:
+                        absolute_start = max(start, absolute_start)
+                        absolute_end = min(end, absolute_end)
+                    if absolute_end <= absolute_start:
+                        continue
+                    words.append({
+                        "word": text,
+                        "start": round(absolute_start, 3),
+                        "end": round(absolute_end, 3),
+                        "confidence": getattr(word, "probability", None),
+                    })
+            return words
+        except Exception as exc:  # noqa: BLE001
+            raise SpeechRecognitionError(describe_whisper_failure(exc)) from exc
+
+
+
 
     def _generate_subtitle_whisper_local(self, video_path: Path, output_path: Path,
                                        config: SpeechRecognitionConfig) -> Path:
@@ -845,4 +917,17 @@ def get_whisper_models() -> List[str]:
         Whisper模型列表
     """
     return ["tiny", "base", "small", "medium", "large"]
+
+
+def transcribe_word_timestamps(
+    video_path: Path,
+    start: float = 0.0,
+    end: Optional[float] = None,
+    model_name: str = "base",
+    language: Optional[str] = "en",
+) -> List[Dict[str, Any]]:
+    """Module-level entry point for the short-form export pipeline."""
+    return SpeechRecognizer.transcribe_word_timestamps(
+        video_path, start=start, end=end, model_name=model_name, language=language
+    )
 

@@ -26,11 +26,13 @@ class TitleGenerator:
         prompt_files_to_use = prompt_files if prompt_files is not None else PROMPT_FILES
         with open(prompt_files_to_use['title'], 'r', encoding='utf-8') as f:
             self.title_prompt = f.read()
-        
         # 使用传入的metadata_dir或默认值
         if metadata_dir is None:
             metadata_dir = METADATA_DIR
         self.metadata_dir = metadata_dir
+
+        from .quality import generation_prompt_hint
+        self.title_prompt += generation_prompt_hint(self.metadata_dir)
         self.llm_raw_output_dir = self.metadata_dir / "step4_llm_raw_output"
     
     def generate_titles(self, high_score_clips: List[Dict]) -> List[Dict]:
@@ -83,19 +85,37 @@ class TitleGenerator:
 
                 for clip in chunk_clips:
                     clip_id = clip.get('id')
-                    generated_title = titles_map.get(clip_id)
-                    if generated_title and isinstance(generated_title, str):
-                        clip['generated_title'] = generated_title
-                        # 安全地获取outline标题用于日志显示
-                        outline = clip.get('outline', {})
-                        if isinstance(outline, dict):
-                            title = outline.get('title', '未知标题')
-                        else:
-                            title = str(outline)
-                        logger.info(f"  > 为片段 {clip_id} ('{title[:20]}...') 生成标题: {generated_title}")
+                    generated = titles_map.get(clip_id)
+                    if isinstance(generated, dict):
+                        generated_title = generated.get('title')
+                        short_hook = generated.get('short_hook')
                     else:
-                        clip['generated_title'] = clip.get('outline', f"片段_{clip_id}")  # 使用outline作为fallback
+                        # Backward-compatible with older prompt responses that
+                        # returned only a title string.
+                        generated_title = generated if isinstance(generated, str) else None
+                        short_hook = None
+
+                    outline = clip.get('outline', {})
+                    if isinstance(outline, dict):
+                        outline_title = outline.get('title', f"Clip {clip_id}")
+                    else:
+                        outline_title = str(outline or f"Clip {clip_id}")
+
+                    if generated_title and isinstance(generated_title, str):
+                        clip['generated_title'] = generated_title.strip()
+                    else:
+                        clip['generated_title'] = outline_title
                         logger.warning(f"  > 未能为片段 {clip_id} 找到或解析标题，使用原始outline")
+
+                    if short_hook and isinstance(short_hook, str):
+                        clip['short_hook'] = short_hook.strip()
+                    else:
+                        clip['short_hook'] = self._derive_short_hook(clip['generated_title'])
+
+                    logger.info(
+                        f"  > 为片段 {clip_id} ('{outline_title[:20]}...') "
+                        f"生成标题: {clip['generated_title']} | hook: {clip['short_hook']}"
+                    )
                 
                 all_clips_with_titles.extend(chunk_clips)
 
@@ -105,9 +125,36 @@ class TitleGenerator:
                 all_clips_with_titles.extend(chunk_clips)
                 continue
                 
+        # Normalize metadata even when an LLM block fails, so downstream
+        # Shorts rendering always has a bounded visual hook.
+        for clip in all_clips_with_titles:
+            title = clip.get("generated_title")
+            if isinstance(title, dict):
+                title = title.get("title")
+            if not isinstance(title, str) or not title.strip():
+                outline = clip.get("outline")
+                title = outline.get("title") if isinstance(outline, dict) else str(outline or f"Clip {clip.get('id')}")
+            clip["generated_title"] = title.strip()
+            hook = clip.get("short_hook")
+            if not isinstance(hook, str) or not hook.strip():
+                clip["short_hook"] = self._derive_short_hook(clip["generated_title"])
+
         logger.info("所有高分片段标题生成完成")
         return all_clips_with_titles
-        
+
+    @staticmethod
+    def _derive_short_hook(title: str) -> str:
+        """Create a safe visual hook when an older/failed LLM response has no hook."""
+        text = re.sub(r"\s+", " ", str(title or "")).strip()
+        text = re.sub(r"\s*[:：—–-]\s*.*$", "", text).strip()
+        text = re.sub(r"[.。!！?？…]+$", "", text).strip()
+        words = text.split()
+        if len(words) > 8:
+            text = " ".join(words[:8])
+        if not text:
+            return "WATCH THIS"
+        return text[:64].strip()
+
     def save_clips_with_titles(self, clips_with_titles: List[Dict], output_path: Path):
         """保存带标题的片段数据"""
         with open(output_path, 'w', encoding='utf-8') as f:

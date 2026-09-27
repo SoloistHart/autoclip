@@ -64,6 +64,8 @@ docker-compose*
 
 # Documentation
 docs/
+!docs/community/
+!docs/community/roadmap-seed.json
 *.md
 !README.md
 

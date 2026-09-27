@@ -7,6 +7,8 @@ import sys
 import asyncio
 from pathlib import Path
 
+import pytest
+
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent.parent.parent
 if str(project_root) not in sys.path:
@@ -16,6 +18,7 @@ from backend.utils.bilibili_downloader import BilibiliDownloader
 import requests
 import base64
 
+@pytest.mark.asyncio
 async def test_bilibili_thumbnail_extraction():
     """测试B站缩略图提取功能"""
     print("🧪 测试B站缩略图提取功能...")
@@ -60,6 +63,7 @@ async def test_bilibili_thumbnail_extraction():
         print(f"❌ 测试失败: {e}")
         return False
 
+@pytest.mark.asyncio
 async def test_youtube_thumbnail_extraction():
     """测试YouTube缩略图提取功能"""
     print("\n🧪 测试YouTube缩略图提取功能...")

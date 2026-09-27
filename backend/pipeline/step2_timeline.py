@@ -63,7 +63,8 @@ class TimelineExtractor:
         # 时长画像追加到提示词（覆盖提示词里写死的 90 秒 / 3–6 分钟）
         from .quality import load_profile
         profile = load_profile(self.metadata_dir)
-        timeline_prompt = self.timeline_prompt + (profile.prompt_hint() if profile else "")
+        from .quality import generation_prompt_hint
+        timeline_prompt = self.timeline_prompt + (profile.prompt_hint() if profile else "") + generation_prompt_hint(self.metadata_dir)
 
         # 2. 按 chunk_index 对所有大纲进行分组
         outlines_by_chunk = defaultdict(list)

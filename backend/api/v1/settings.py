@@ -84,6 +84,10 @@ class ProcessingSettings(BaseModel):
     processing_chunk_size: int = Field(default=5000, description="处理块大小")
     processing_min_score: float = Field(default=0.7, description="最小评分阈值")
     processing_max_clips: int = Field(default=5, description="合集最大切片数")
+    processing_clip_count: int = Field(default=0, description="最终保留切片数量；0=自动")
+    generation_language: str = Field(default="english", description="Generated metadata language: original / english / chinese / detect")
+    short_duration_preference: str = Field(default="auto", description="Short 目标时长：auto / 15-30 / 30-60 / 60-90 / 90-180 / custom")
+    short_duration_custom_sec: int = Field(default=60, description="custom Short 目标秒数")
     processing_max_retries: int = Field(default=3, description="最大重试次数")
     
     @validator('processing_chunk_size')
@@ -92,6 +96,30 @@ class ProcessingSettings(BaseModel):
             raise ValueError('处理块大小必须在1000-10000之间')
         return v
     
+    @validator('processing_clip_count')
+    def validate_clip_count(cls, v):
+        if not 0 <= v <= 100:
+            raise ValueError("最终切片数量必须在0-100之间")
+        return v
+
+    @validator('generation_language')
+    def validate_generation_language(cls, v):
+        if v not in {"original", "english", "chinese", "detect"}:
+            raise ValueError("生成内容语言必须是 original / english / chinese / detect")
+        return v
+
+    @validator('short_duration_preference')
+    def validate_short_duration_preference(cls, v):
+        if v not in {"auto", "15-30", "30-60", "60-90", "90-180", "custom"}:
+            raise ValueError("Short 目标时长设置无效")
+        return v
+
+    @validator('short_duration_custom_sec')
+    def validate_short_duration_custom_sec(cls, v):
+        if not 5 <= v <= 180:
+            raise ValueError("Short 自定义时长必须在5-180秒之间")
+        return v
+
     @validator('processing_min_score')
     def validate_min_score(cls, v):
         if not 0.1 <= v <= 1.0:
@@ -272,6 +300,10 @@ async def get_settings():
                 processing_chunk_size=config.chunk_size,
                 processing_min_score=config.min_score_threshold,
                 processing_max_clips=config.max_clips_per_collection,
+                processing_clip_count=0,
+                generation_language="english",
+                short_duration_preference="auto",
+                short_duration_custom_sec=60,
                 processing_max_retries=config.max_retries
             ),
             logs=LogSettings(
@@ -700,7 +732,6 @@ def _saved_provider_api_key(settings: DesktopSettings, provider: str) -> str:
 async def get_available_models(
     provider: str = "",
     base_url: str = "",
-    api_key: str = "",
     refresh: bool = False,
 ):
     """
@@ -712,8 +743,9 @@ async def get_available_models(
     try:
         from backend.core.model_catalog import list_available_models
 
-        key = (api_key or "").strip()
-        if not key and provider:
+        # Never accept API keys in URL query parameters; URLs may be logged or retained.
+        key = ""
+        if provider:
             try:
                 settings = await get_settings()
                 key = _saved_provider_api_key(settings, provider).strip()
@@ -745,7 +777,7 @@ async def get_local_presets():
 
 
 @router.get("/compatible-models")
-async def list_compatible_models(base_url: str = "", provider: str = "openai", api_key: str = ""):
+async def list_compatible_models(base_url: str = "", provider: str = "openai"):
     """
     列出一个 OpenAI 兼容服务（Ollama / LM Studio / vLLM…）实际提供的模型（GET {base_url}/models）。
     设置页选本地预设时用它填模型下拉，免得用户手敲 `qwen2.5:7b` 这种名字。
@@ -758,7 +790,7 @@ async def list_compatible_models(base_url: str = "", provider: str = "openai", a
         raise HTTPException(status_code=400, detail="缺少 base_url")
     try:
         import httpx
-        headers = {"Authorization": f"Bearer {api_key or OPENAI_COMPATIBLE_PLACEHOLDER_KEY}"}
+        headers = {"Authorization": f"Bearer {OPENAI_COMPATIBLE_PLACEHOLDER_KEY}"}
         # 本地地址不走系统代理（否则 macOS 上开着 Clash 之类会 502）
         async with httpx.AsyncClient(timeout=5.0, trust_env=not is_local_url(url)) as client:
             resp = await client.get(f"{url}/models", headers=headers)

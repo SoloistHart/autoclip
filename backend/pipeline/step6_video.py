@@ -3,6 +3,7 @@ Step 6: 视频生成 - 根据聚类结果生成最终视频切片
 """
 import json
 import logging
+import os
 import re
 from typing import List, Dict, Any, Optional
 from pathlib import Path
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class VideoGenerator:
     """视频生成器"""
     
-    def __init__(self, clips_dir: Optional[str] = None, collections_dir: Optional[str] = None, metadata_dir: Optional[str] = None):
+    def __init__(self, clips_dir: Optional[str] = None, collections_dir: Optional[str] = None, metadata_dir: Optional[str] = None, progress_callback=None):
         # 强制使用项目内专属目录，不使用全局目录作为后备
         if not clips_dir:
             raise ValueError("clips_dir 参数是必需的，不能使用全局路径")
@@ -26,6 +27,7 @@ class VideoGenerator:
         self.clips_dir = Path(clips_dir)
         self.collections_dir = Path(collections_dir)
         self.metadata_dir = Path(metadata_dir) if metadata_dir else METADATA_DIR
+        self.progress_callback = progress_callback
         
         # 确保目录存在
         self.clips_dir.mkdir(parents=True, exist_ok=True)
@@ -52,13 +54,18 @@ class VideoGenerator:
         for clip in clips_with_titles:
             clips_data.append({
                 'id': clip['id'],
-                'title': clip.get('generated_title', f"片段_{clip['id']}"),
+                'title': clip.get('generated_title', f"Clip {clip['id']}"),
                 'start_time': clip['start_time'],
                 'end_time': clip['end_time']
             })
         
         # 批量生成切片
-        successful_clips = self.video_processor.batch_extract_clips(input_video, clips_data)
+        successful_clips = self.video_processor.batch_extract_clips(
+            input_video, clips_data,
+            progress_callback=self.progress_callback,
+            progress_offset=0.0,
+            progress_span=0.70,
+        )
         
         logger.info(f"切片视频生成完成，共{len(successful_clips)}个切片")
         return successful_clips
@@ -76,7 +83,12 @@ class VideoGenerator:
         logger.info("开始生成合集视频...")
         
         # 生成合集视频和缩略图
-        successful_collections = self.video_processor.create_collections_from_metadata(collections_data)
+        successful_collections = self.video_processor.create_collections_from_metadata(
+            collections_data,
+            progress_callback=self.progress_callback,
+            progress_offset=0.70,
+            progress_span=0.30,
+        )
         
         logger.info(f"合集视频生成完成，共{len(successful_collections)}个合集")
         return successful_collections
@@ -136,7 +148,7 @@ class VideoGenerator:
 def run_step6_video(clips_with_titles_path: Path, collections_path: Path, 
                    input_video: Path, output_dir: Optional[Path] = None, 
                    clips_dir: Optional[str] = None, collections_dir: Optional[str] = None, 
-                   metadata_dir: Optional[str] = None) -> Dict:
+                   metadata_dir: Optional[str] = None, progress_callback=None) -> Dict:
     """
     运行Step 6: 视频切割
     
@@ -157,7 +169,10 @@ def run_step6_video(clips_with_titles_path: Path, collections_path: Path,
         collections_data = json.load(f)
     
     # 创建视频生成器
-    generator = VideoGenerator(clips_dir=clips_dir, collections_dir=collections_dir, metadata_dir=metadata_dir)
+    generator = VideoGenerator(
+        clips_dir=clips_dir, collections_dir=collections_dir,
+        metadata_dir=metadata_dir, progress_callback=progress_callback,
+    )
     
     # 生成切片视频
     successful_clips = generator.generate_clips(clips_with_titles, input_video)
@@ -176,6 +191,92 @@ def run_step6_video(clips_with_titles_path: Path, collections_path: Path,
         generator.save_clip_metadata(clips_with_titles)
         generator.save_collection_metadata(collections_data)
     
+    # Automatically render the selected clips into upload-ready YouTube Shorts.
+    # Keep the raw Step 6 clips intact under output/clips; final publishable files
+    # are written by the existing Shorts exporter under output/exports.
+    final_exports: List[Dict[str, Any]] = []
+    skipped_short_exports: List[Dict[str, Any]] = []
+    auto_publish = os.getenv("AUTOCLIP_AUTO_PUBLISH_SHORTS", "true").strip().lower() not in {"0", "false", "no", "off"}
+    if auto_publish and successful_clips:
+        from ..services.publish_export import ExportRequest, export_clip
+        from .quality import short_publish_check, select_short_candidates
+
+        # Content architecture: only publish candidates that survived the
+        # complete-thought + structure quality gate. Raw Step 6 clips remain
+        # available for human editing even when they are not publishable Shorts.
+        requested_count = 0
+        try:
+            from ..core.llm_manager import get_llm_manager
+            requested_count = int(get_llm_manager().get_processing_setting("processing_clip_count") or 0)
+        except Exception:
+            requested_count = 0
+        candidate_clips = select_short_candidates(clips_with_titles, requested_count=requested_count)
+        candidate_ids = {str(item.get("id")) for item in candidate_clips}
+
+        successful_ids = []
+        for clip in clips_with_titles:
+            clip_id = str(clip.get("id"))
+            if not any(path.name.startswith(f"{clip_id}_") for path in successful_clips):
+                continue
+
+            publishable = clip.get("short_publishable")
+            reasons = clip.get("short_publish_rejection_reasons")
+            if publishable is not True:
+                # Re-check here so old/incomplete metadata cannot bypass the gate.
+                publishable, reasons = short_publish_check(clip)
+            if not publishable:
+                skipped_short_exports.append({
+                    "ok": False,
+                    "clip_id": clip_id,
+                    "skipped": True,
+                    "reason": "short_quality_gate",
+                    "reasons": reasons or ["quality_gate_failed"],
+                })
+                logger.info(
+                    "自动 Shorts 跳过 clip_id=%s：质量门禁失败 (%s)",
+                    clip_id,
+                    ", ".join(reasons or ["quality_gate_failed"]),
+                )
+                continue
+
+            if clip_id not in candidate_ids:
+                skipped_short_exports.append({
+                    "ok": False,
+                    "clip_id": clip_id,
+                    "skipped": True,
+                    "reason": "not_selected_short_candidate",
+                    "reasons": ["candidate_selection_limit"],
+                })
+                continue
+            successful_ids.append(clip_id)
+
+        project_id = Path(metadata_dir).parent.name if metadata_dir else generator.metadata_dir.parent.name
+        total = len(successful_ids)
+        for index, clip_id in enumerate(successful_ids, start=1):
+            clip = next((item for item in clips_with_titles if str(item.get("id")) == clip_id), {})
+            try:
+                export_result = export_clip(
+                    ExportRequest(
+                        project_id=project_id,
+                        clip_id=clip_id,
+                        preset="shorts",
+                        subtitles=True,
+                        title_card=True,
+                        hook_text=clip.get("short_hook"),
+                    ),
+                    progress_callback=(
+                        (lambda percent, i=index, total=total: generator.progress_callback(
+                            0.70 + (0.30 * ((i - 1) + percent / 100.0) / max(total, 1)),
+                            f"Publishing Short {i}/{total}",
+                        ))
+                        if generator.progress_callback else None
+                    ),
+                )
+                final_exports.append(export_result)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("自动 Shorts 导出失败: clip_id=%s", clip_id)
+                final_exports.append({"ok": False, "clip_id": clip_id, "error": str(exc)[:500]})
+
     # 返回结果信息
     result = {
         'clips_generated': len(successful_clips),
@@ -183,7 +284,13 @@ def run_step6_video(clips_with_titles_path: Path, collections_path: Path,
         'clip_paths': [str(path) for path in successful_clips],
         'collection_paths': [collection['video_path'] for collection in successful_collections],
         'collection_thumbnails': [collection['thumbnail_path'] for collection in successful_collections if collection['thumbnail_path']],
-        'collections_info': successful_collections  # 包含完整的合集信息
+        'collections_info': successful_collections,  # 包含完整的合集信息
+        'auto_publish_shorts': auto_publish,
+        'final_exports': final_exports,
+        'skipped_short_exports': skipped_short_exports,
+        'final_exports_generated': sum(1 for item in final_exports if item.get('ok')),
+        'final_exports_failed': sum(1 for item in final_exports if not item.get('ok')),
+        'final_exports_skipped': len(skipped_short_exports),
     }
     
     logger.info(f"视频生成完成: {result['clips_generated']}个切片, {result['collections_generated']}个合集")

@@ -27,15 +27,27 @@ class Fail(Exception):
     """与 onnxruntime 的异常类名一致。"""
 
 
-def test_default_backend_is_cpu_int8(monkeypatch):
+def test_default_backend_uses_cuda_when_available_otherwise_cpu(monkeypatch):
     monkeypatch.delenv("AUTOCLIP_WHISPER_DEVICE", raising=False)
-    assert resolve_local_whisper_backend() == ("cpu", "int8")
+    try:
+        import ctranslate2
+        has_cuda = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        has_cuda = False
+    expected = ("cuda", "float16") if has_cuda else ("cpu", "int8")
+    assert resolve_local_whisper_backend() == expected
 
 
-def test_cuda_opt_in_does_not_force_int8(monkeypatch):
+def test_cuda_opt_in_and_auto_detection(monkeypatch):
     monkeypatch.setenv("AUTOCLIP_WHISPER_DEVICE", "cuda")
     assert resolve_local_whisper_backend() == ("cuda", "float16")
-    assert resolve_local_whisper_backend("auto") == ("auto", "default")
+    try:
+        import ctranslate2
+        has_cuda = ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        has_cuda = False
+    expected_auto = ("cuda", "float16") if has_cuda else ("cpu", "int8")
+    assert resolve_local_whisper_backend("auto") == expected_auto
     assert resolve_local_whisper_backend("CUDA") == ("cuda", "float16")
 
 
@@ -124,7 +136,7 @@ def _recognizer():
 
 
 def test_cpu_encode_error_becomes_readable_and_is_not_logged_with_traceback(tmp_path, monkeypatch, caplog):
-    monkeypatch.delenv("AUTOCLIP_WHISPER_DEVICE", raising=False)
+    monkeypatch.setenv("AUTOCLIP_WHISPER_DEVICE", "cpu")
     calls = []
 
     class FakeModel:

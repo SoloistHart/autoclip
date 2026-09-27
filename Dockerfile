@@ -67,6 +67,7 @@ RUN groupadd -r autoclip && useradd -r -g autoclip autoclip
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     curl \
+    fonts-noto-cjk \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -81,6 +82,7 @@ COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
 # 复制项目文件
 COPY backend/ ./backend/
 COPY scripts/ ./scripts/
+COPY docs/ ./docs/
 COPY *.sh ./
 COPY env.example .env
 COPY docker-entrypoint.sh ./
